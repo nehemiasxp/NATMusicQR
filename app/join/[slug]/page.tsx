@@ -45,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.1'
+export const JOIN_UI_VERSION = '2.1.2'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -1024,7 +1024,7 @@ export default function JoinPage() {
         )}
 
         <p className="mt-8 text-center text-[10px] text-zinc-700">
-          Join UI v{JOIN_UI_VERSION}
+          NatMusicQR V. {JOIN_UI_VERSION}
         </p>
       </div>
     </div>

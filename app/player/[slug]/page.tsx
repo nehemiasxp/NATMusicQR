@@ -34,6 +34,8 @@ export default function PlayerPage() {
     downPercent: number
   } | null>(null)
   const [autoplayOn, setAutoplayOn] = useState(false)
+  /** Dispara fade-out suave en YouTubePlayer antes de saltar por votos */
+  const [fadeOutKey, setFadeOutKey] = useState<string | null>(null)
 
   const advancingRef = useRef(false)
   const venueIdRef = useRef<string | null>(null)
@@ -132,53 +134,69 @@ export default function PlayerPage() {
     [applyQueueState]
   )
 
-  const handleEnded = useCallback(async (asSkip = false) => {
-    const venueId = venueIdRef.current
-    const current = playingItemRef.current
-    if (!venueId || !current || advancingRef.current) return
+  const finishAdvance = useCallback(
+    async (asSkip: boolean) => {
+      const venueId = venueIdRef.current
+      const current = playingItemRef.current
+      if (!venueId || !current || advancingRef.current) return
 
-    advancingRef.current = true
-    setPlayerNote(
-      asSkip
-        ? 'Saltando por votos negativos…'
-        : 'Pasando a la siguiente canción…'
-    )
-    setVoteStats(null)
-
-    try {
-      if (rlsLocalRef.current) {
-        excludeIdsRef.current.add(current.id)
-      }
-
-      const result = await advanceQueue(venueId, current.id, {
-        excludeIds: rlsLocalRef.current ? excludeIdsRef.current : new Set(),
-        status: asSkip ? 'skipped' : 'played',
-        autoplayEnabled: flagsRef.current.autoplayEnabled,
-      })
-
-      if (result.excludeIds && rlsLocalRef.current) {
-        excludeIdsRef.current = result.excludeIds
-      }
-      if (result.rlsBlocked) rlsLocalRef.current = true
-
-      if (result.error && !result.playing && result.items.length === 0) {
-        console.error('Error avanzando cola:', result.error)
-        setError(result.error.message || 'No se pudo avanzar la cola')
-        return
-      }
-
-      applyQueueState(result.items, result.playing)
+      advancingRef.current = true
       setPlayerNote(
-        result.playing
-          ? null
-          : flagsRef.current.autoplayEnabled
-            ? 'Cola vacía — buscando en catálogo…'
-            : 'Cola vacía — esperando pedidos'
+        asSkip
+          ? 'Cerrando tema por votos… siguiente'
+          : 'Pasando a la siguiente canción…'
       )
-    } finally {
-      advancingRef.current = false
-    }
-  }, [applyQueueState])
+      setVoteStats(null)
+      setFadeOutKey(null)
+
+      try {
+        if (rlsLocalRef.current) {
+          excludeIdsRef.current.add(current.id)
+        }
+
+        const result = await advanceQueue(venueId, current.id, {
+          excludeIds: rlsLocalRef.current
+            ? excludeIdsRef.current
+            : new Set(),
+          status: asSkip ? 'skipped' : 'played',
+          autoplayEnabled: flagsRef.current.autoplayEnabled,
+        })
+
+        if (result.excludeIds && rlsLocalRef.current) {
+          excludeIdsRef.current = result.excludeIds
+        }
+        if (result.rlsBlocked) rlsLocalRef.current = true
+
+        if (result.error && !result.playing && result.items.length === 0) {
+          console.error('Error avanzando cola:', result.error)
+          setError(result.error.message || 'No se pudo avanzar la cola')
+          return
+        }
+
+        applyQueueState(result.items, result.playing)
+        setPlayerNote(
+          result.playing
+            ? null
+            : flagsRef.current.autoplayEnabled
+              ? 'Cola vacía — buscando en catálogo…'
+              : 'Cola vacía — esperando pedidos'
+        )
+      } finally {
+        advancingRef.current = false
+      }
+    },
+    [applyQueueState]
+  )
+
+  /** Fin natural o error: sin fade (o fade ya terminó). */
+  const handleEnded = useCallback(() => {
+    void finishAdvance(false)
+  }, [finishAdvance])
+
+  /** Tras fade-out por votos */
+  const handleFadeOutComplete = useCallback(() => {
+    void finishAdvance(true)
+  }, [finishAdvance])
 
   const handlePlayerError = useCallback(
     (code: number) => {
@@ -187,13 +205,13 @@ export default function PlayerPage() {
         `YouTube no pudo reproducir este video (código ${code}). Saltando…`
       )
       window.setTimeout(() => {
-        void handleEnded(false)
+        void finishAdvance(false)
       }, 1500)
     },
-    [handleEnded]
+    [finishAdvance]
   )
 
-  // Poll votos y saltar si umbral
+  // Poll votos → fade suave, no corte brusco
   useEffect(() => {
     if (!playingItem?.id || !flagsRef.current.votingEnabled) {
       setVoteStats(null)
@@ -215,8 +233,13 @@ export default function PlayerPage() {
           down: data.down ?? 0,
           downPercent: data.downPercent ?? 0,
         })
-        if (data.shouldSkip && !advancingRef.current) {
-          void handleEnded(true)
+        if (
+          data.shouldSkip &&
+          !advancingRef.current &&
+          fadeOutKey !== itemId
+        ) {
+          setPlayerNote('La sala pidió cambio… bajando volumen')
+          setFadeOutKey(itemId)
         }
       } catch {
         /* ignore */
@@ -229,7 +252,7 @@ export default function PlayerPage() {
       cancelled = true
       clearInterval(t)
     }
-  }, [playingItem?.id, handleEnded])
+  }, [playingItem?.id, fadeOutKey])
 
   useEffect(() => {
     if (!slug) return
@@ -384,8 +407,16 @@ export default function PlayerPage() {
               key={playingItem?.id}
               videoId={currentVideo.youtube_id}
               title={currentVideo.title}
-              onEnded={() => handleEnded(false)}
+              onEnded={
+                fadeOutKey === playingItem?.id
+                  ? handleFadeOutComplete
+                  : handleEnded
+              }
               onError={handlePlayerError}
+              fadeOutKey={
+                fadeOutKey === playingItem?.id ? fadeOutKey : null
+              }
+              fadeOutMs={3200}
             />
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center text-center p-6">
