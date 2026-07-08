@@ -570,7 +570,7 @@ export default function AdminPage() {
               <label className="flex items-center gap-2 text-sm shrink-0">
                 <input
                   type="checkbox"
-                  checked={config.autoplayMusic.enabled}
+                  checked={config.autoplayMusic?.enabled ?? false}
                   onChange={(e) =>
                     setConfig((c) => ({
                       ...c,
@@ -595,11 +595,14 @@ export default function AdminPage() {
               <label className="flex items-center gap-2 text-sm shrink-0">
                 <input
                   type="checkbox"
-                  checked={config.voting.enabled}
+                  checked={config.voting?.enabled ?? false}
                   onChange={(e) =>
                     setConfig((c) => ({
                       ...c,
-                      voting: { ...c.voting, enabled: e.target.checked },
+                      voting: {
+                        ...(c.voting ?? emptyConfig.voting),
+                        enabled: e.target.checked,
+                      },
                     }))
                   }
                 />
@@ -616,12 +619,12 @@ export default function AdminPage() {
                   min={1}
                   max={100}
                   disabled={!config.voting.enabled}
-                  value={config.voting.skipThresholdPercent}
+                  value={config.voting?.skipThresholdPercent ?? 80}
                   onChange={(e) =>
                     setConfig((c) => ({
                       ...c,
                       voting: {
-                        ...c.voting,
+                        ...(c.voting ?? emptyConfig.voting),
                         skipThresholdPercent: Number(e.target.value) || 80,
                       },
                     }))
@@ -638,12 +641,12 @@ export default function AdminPage() {
                   min={1}
                   max={100}
                   disabled={!config.voting.enabled}
-                  value={config.voting.minVotesToSkip}
+                  value={config.voting?.minVotesToSkip ?? 2}
                   onChange={(e) =>
                     setConfig((c) => ({
                       ...c,
                       voting: {
-                        ...c.voting,
+                        ...(c.voting ?? emptyConfig.voting),
                         minVotesToSkip: Number(e.target.value) || 2,
                       },
                     }))
