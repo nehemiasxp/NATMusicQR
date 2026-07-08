@@ -30,6 +30,11 @@ export type VotingConfig = {
   skipThresholdPercent: number
   /** Mínimo de votos totales antes de poder saltar */
   minVotesToSkip: number
+  /**
+   * Si true: cada 👍 cancela un 👎 al calcular el %.
+   * downEfectivos = max(0, 👎 − 👍), luego % = downEfectivos / total × 100
+   */
+  upCancelsDown: boolean
 }
 
 export type RuntimeJukeboxConfig = {
@@ -80,6 +85,7 @@ export const defaultJukeboxConfig: RuntimeJukeboxConfig = {
     enabled: true,
     skipThresholdPercent: 80,
     minVotesToSkip: 2,
+    upCancelsDown: true,
   },
   ui: {
     showQueueOnJoin: true,
@@ -214,6 +220,9 @@ export function mergeJukeboxConfig(
         100,
         defaultJukeboxConfig.voting.minVotesToSkip
       ),
+      upCancelsDown:
+        votingPartial.upCancelsDown ??
+        defaultJukeboxConfig.voting.upCancelsDown,
     },
     ui: {
       ...defaultJukeboxConfig.ui,

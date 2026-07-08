@@ -32,6 +32,7 @@ type PublicConfig = {
     enabled: boolean
     skipThresholdPercent: number
     minVotesToSkip: number
+    upCancelsDown?: boolean
   }
   autoplayMusic?: { enabled: boolean }
 }
@@ -44,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.0'
+export const JOIN_UI_VERSION = '2.1.1'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -717,7 +718,10 @@ export default function JoinPage() {
                       </span>
                     </button>
                   </div>
-                  <p className="max-w-[8.5rem] text-right text-[10px] leading-snug text-zinc-500">
+                  <p className="max-w-[9rem] text-right text-[10px] leading-snug text-zinc-500">
+                    {rules.voting.upCancelsDown !== false
+                      ? '👍 cancela 👎 · '
+                      : ''}
                     👎 ≥ {rules.voting.skipThresholdPercent}% (mín.{' '}
                     {rules.voting.minVotesToSkip}) salta
                   </p>

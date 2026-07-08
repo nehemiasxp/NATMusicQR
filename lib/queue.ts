@@ -261,9 +261,12 @@ export type VoteTally = {
   up: number
   down: number
   total: number
+  /** 👎 que cuentan tras restar 👍 (si upCancelsDown) */
+  effectiveDown: number
   downPercent: number
   myVote: 'up' | 'down' | null
   shouldSkip: boolean
+  upCancelsDown: boolean
 }
 
 export function tallyVotes(
@@ -272,6 +275,8 @@ export function tallyVotes(
     deviceId?: string | null
     skipThresholdPercent: number
     minVotesToSkip: number
+    /** Por defecto true: cada 👍 cancela un 👎 */
+    upCancelsDown?: boolean
   }
 ): VoteTally {
   let up = 0
@@ -285,12 +290,24 @@ export function tallyVotes(
     }
   }
   const total = up + down
-  const downPercent = total === 0 ? 0 : Math.round((down / total) * 100)
+  const upCancelsDown = opts.upCancelsDown !== false
+  const effectiveDown = upCancelsDown ? Math.max(0, down - up) : down
+  const downPercent =
+    total === 0 ? 0 : Math.round((effectiveDown / total) * 100)
   const shouldSkip =
     total >= opts.minVotesToSkip &&
     downPercent >= opts.skipThresholdPercent
 
-  return { up, down, total, downPercent, myVote, shouldSkip }
+  return {
+    up,
+    down,
+    total,
+    effectiveDown,
+    downPercent,
+    myVote,
+    shouldSkip,
+    upCancelsDown,
+  }
 }
 
 export { RLS_HINT }

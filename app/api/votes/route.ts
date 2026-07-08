@@ -55,6 +55,7 @@ export async function GET(request: NextRequest) {
     deviceId,
     skipThresholdPercent: cfg.voting.skipThresholdPercent,
     minVotesToSkip: cfg.voting.minVotesToSkip,
+    upCancelsDown: cfg.voting.upCancelsDown,
   })
 
   return NextResponse.json({
@@ -62,6 +63,7 @@ export async function GET(request: NextRequest) {
     ...tally,
     skipThresholdPercent: cfg.voting.skipThresholdPercent,
     minVotesToSkip: cfg.voting.minVotesToSkip,
+    upCancelsDown: cfg.voting.upCancelsDown,
   })
 }
 
@@ -164,6 +166,7 @@ export async function POST(request: NextRequest) {
     deviceId,
     skipThresholdPercent: cfg.voting.skipThresholdPercent,
     minVotesToSkip: cfg.voting.minVotesToSkip,
+    upCancelsDown: cfg.voting.upCancelsDown,
   })
 
   return NextResponse.json({
@@ -172,5 +175,6 @@ export async function POST(request: NextRequest) {
     ...tally,
     skipThresholdPercent: cfg.voting.skipThresholdPercent,
     minVotesToSkip: cfg.voting.minVotesToSkip,
+    upCancelsDown: cfg.voting.upCancelsDown,
   })
 }

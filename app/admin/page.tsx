@@ -7,7 +7,7 @@ import type { RuntimeJukeboxConfig } from '@/config/jukebox.config'
 const STORAGE_KEY = 'natmusicqr:admin-password'
 
 /** Sube este número en cada release para verificar el deploy en Vercel */
-export const ADMIN_UI_VERSION = '2.0.0'
+export const ADMIN_UI_VERSION = '2.1.1'
 
 const emptyConfig: RuntimeJukeboxConfig = {
   maxDurationSeconds: 300,
@@ -28,6 +28,7 @@ const emptyConfig: RuntimeJukeboxConfig = {
     enabled: true,
     skipThresholdPercent: 80,
     minVotesToSkip: 2,
+    upCancelsDown: true,
   },
   ui: { showQueueOnJoin: true, pollIntervalMs: 3000 },
 }
@@ -795,6 +796,28 @@ export default function AdminPage() {
                         className={inputClass}
                       />
                     </Field>
+                  </div>
+                  <div
+                    className={`rounded-lg border p-3 ${
+                      config.voting?.enabled
+                        ? 'border-emerald-500/20 bg-emerald-500/5'
+                        : 'border-zinc-800/80 opacity-50'
+                    }`}
+                  >
+                    <RowToggle
+                      title="Voto + resta Voto −"
+                      subtitle="Cada 👍 cancela un 👎 al calcular el % de salto"
+                      checked={config.voting?.upCancelsDown ?? true}
+                      onChange={(v) =>
+                        setConfig((c) => ({
+                          ...c,
+                          voting: {
+                            ...(c.voting ?? emptyConfig.voting),
+                            upCancelsDown: v,
+                          },
+                        }))
+                      }
+                    />
                   </div>
                 </div>
               </section>
