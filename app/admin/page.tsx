@@ -20,6 +20,12 @@ const emptyConfig: RuntimeJukeboxConfig = {
     openTime: '18:00',
     closeTime: '02:00',
   },
+  autoplayMusic: { enabled: false },
+  voting: {
+    enabled: true,
+    skipThresholdPercent: 80,
+    minVotesToSkip: 2,
+  },
   ui: { showQueueOnJoin: true, pollIntervalMs: 3000 },
 }
 
@@ -82,8 +88,15 @@ export default function AdminPage() {
         access: {
           ...emptyConfig.access,
           ...data.config?.access,
-          // el GET público no manda pin; lo pedimos en admin vía campo editable
           pin: data.config?.access?.pin ?? emptyConfig.access.pin,
+        },
+        autoplayMusic: {
+          ...emptyConfig.autoplayMusic,
+          ...data.config?.autoplayMusic,
+        },
+        voting: {
+          ...emptyConfig.voting,
+          ...data.config?.voting,
         },
       })
       setAuthed(true)
@@ -543,6 +556,105 @@ export default function AdminPage() {
                 />
               </label>
             </div>
+          </section>
+
+          <section className="rounded-2xl border border-emerald-900/40 bg-emerald-950/15 p-5 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-lg">autoplayMusica</h2>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  Si la cola está vacía, reproduce al azar canciones del catálogo
+                  del local (no de pedidos de mesa).
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm shrink-0">
+                <input
+                  type="checkbox"
+                  checked={config.autoplayMusic.enabled}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      autoplayMusic: { enabled: e.target.checked },
+                    }))
+                  }
+                />
+                Activo
+              </label>
+            </div>
+          </section>
+
+          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-semibold text-lg">Votos 👍 / 👎</h2>
+                <p className="text-xs text-zinc-400 mt-0.5">
+                  Cada celular vota la canción en reproducción. Si los 👎
+                  llegan al % indicado, se salta a la siguiente.
+                </p>
+              </div>
+              <label className="flex items-center gap-2 text-sm shrink-0">
+                <input
+                  type="checkbox"
+                  checked={config.voting.enabled}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      voting: { ...c.voting, enabled: e.target.checked },
+                    }))
+                  }
+                />
+                Activo
+              </label>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <label className="block">
+                <span className="text-sm text-zinc-400">
+                  % no me gusta para saltar
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  disabled={!config.voting.enabled}
+                  value={config.voting.skipThresholdPercent}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      voting: {
+                        ...c.voting,
+                        skipThresholdPercent: Number(e.target.value) || 80,
+                      },
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
+                />
+              </label>
+              <label className="block">
+                <span className="text-sm text-zinc-400">
+                  Mín. votos para saltar
+                </span>
+                <input
+                  type="number"
+                  min={1}
+                  max={100}
+                  disabled={!config.voting.enabled}
+                  value={config.voting.minVotesToSkip}
+                  onChange={(e) =>
+                    setConfig((c) => ({
+                      ...c,
+                      voting: {
+                        ...c.voting,
+                        minVotesToSkip: Number(e.target.value) || 2,
+                      },
+                    }))
+                  }
+                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
+                />
+              </label>
+            </div>
+            <p className="text-xs text-zinc-500">
+              Ej: 80% y mín. 2 → con 2 👎 de 2 votos (100%) salta; con 1 👎 no.
+            </p>
           </section>
 
           <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">

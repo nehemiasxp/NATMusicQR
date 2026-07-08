@@ -9,6 +9,13 @@ import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 3000
 
+type RuntimeFlags = {
+  autoplayEnabled: boolean
+  votingEnabled: boolean
+  skipThresholdPercent: number
+  minVotesToSkip: number
+}
+
 export default function PlayerPage() {
   const params = useParams<{ slug: string }>()
   const slug = params?.slug
@@ -21,13 +28,23 @@ export default function PlayerPage() {
   const [liveNote, setLiveNote] = useState<string | null>(null)
   const [playerNote, setPlayerNote] = useState<string | null>(null)
   const [lastSync, setLastSync] = useState<string | null>(null)
+  const [voteStats, setVoteStats] = useState<{
+    up: number
+    down: number
+    downPercent: number
+  } | null>(null)
 
   const advancingRef = useRef(false)
   const venueIdRef = useRef<string | null>(null)
-  /** Solo para modo local cuando RLS bloquea writes */
   const excludeIdsRef = useRef<Set<string>>(new Set())
   const playingItemRef = useRef<QueueItem | null>(null)
   const rlsLocalRef = useRef(false)
+  const flagsRef = useRef<RuntimeFlags>({
+    autoplayEnabled: false,
+    votingEnabled: true,
+    skipThresholdPercent: 80,
+    minVotesToSkip: 2,
+  })
 
   useEffect(() => {
     playingItemRef.current = playingItem
@@ -42,9 +59,25 @@ export default function PlayerPage() {
     []
   )
 
+  const loadFlags = useCallback(async () => {
+    try {
+      const res = await fetch('/api/config')
+      const data = await res.json()
+      flagsRef.current = {
+        autoplayEnabled: Boolean(data.autoplayMusic?.enabled),
+        votingEnabled: Boolean(data.voting?.enabled),
+        skipThresholdPercent: Number(data.voting?.skipThresholdPercent ?? 80),
+        minVotesToSkip: Number(data.voting?.minVotesToSkip ?? 2),
+      }
+    } catch {
+      /* defaults */
+    }
+  }, [])
+
   const refreshQueue = useCallback(
     async (venueId: string, opts?: { promote?: boolean }) => {
       const promote = opts?.promote !== false
+      const autoplayEnabled = flagsRef.current.autoplayEnabled
 
       if (promote) {
         const { items, playing, error: syncError, rlsBlocked } =
@@ -52,11 +85,10 @@ export default function PlayerPage() {
             excludeIds: rlsLocalRef.current
               ? excludeIdsRef.current
               : new Set(),
+            autoplayEnabled,
           })
 
-        if (rlsBlocked) {
-          rlsLocalRef.current = true
-        }
+        if (rlsBlocked) rlsLocalRef.current = true
 
         if (syncError && !playing && items.length === 0) {
           console.error('Error sincronizando cola:', syncError)
@@ -65,15 +97,11 @@ export default function PlayerPage() {
         }
 
         applyQueueState(items, playing)
-        if (syncError && !playing) {
-          setError(syncError.message)
-        } else {
-          setError(null)
-        }
+        if (syncError && !playing) setError(syncError.message)
+        else setError(null)
         return
       }
 
-      // Solo lectura (poll suave): no forzar promote si ya hay playing
       const { items, error: fetchError } = await fetchActiveQueue(venueId)
       if (fetchError) {
         console.error('Error leyendo cola:', fetchError)
@@ -89,36 +117,29 @@ export default function PlayerPage() {
         list.find((i) => i.status === 'playing' && i.videos?.youtube_id) ??
         null
 
-      // Si no hay playing pero hay cola, promover
-      if (!playing && list.some((i) => i.status === 'queued')) {
+      if (!playing && (list.some((i) => i.status === 'queued') || autoplayEnabled)) {
         await refreshQueue(venueId, { promote: true })
         return
       }
 
-      // Mantener el item actual si el poll devuelve el mismo id
-      const currentId = playingItemRef.current?.id
-      if (
-        currentId &&
-        playing &&
-        playing.id === currentId &&
-        playingItemRef.current
-      ) {
-        applyQueueState(list, playing)
-      } else {
-        applyQueueState(list, playing)
-      }
+      applyQueueState(list, playing)
       setError(null)
     },
     [applyQueueState]
   )
 
-  const handleEnded = useCallback(async () => {
+  const handleEnded = useCallback(async (asSkip = false) => {
     const venueId = venueIdRef.current
     const current = playingItemRef.current
     if (!venueId || !current || advancingRef.current) return
 
     advancingRef.current = true
-    setPlayerNote('Pasando a la siguiente canción…')
+    setPlayerNote(
+      asSkip
+        ? 'Saltando por votos negativos…'
+        : 'Pasando a la siguiente canción…'
+    )
+    setVoteStats(null)
 
     try {
       if (rlsLocalRef.current) {
@@ -126,17 +147,15 @@ export default function PlayerPage() {
       }
 
       const result = await advanceQueue(venueId, current.id, {
-        excludeIds: rlsLocalRef.current
-          ? excludeIdsRef.current
-          : new Set(),
+        excludeIds: rlsLocalRef.current ? excludeIdsRef.current : new Set(),
+        status: asSkip ? 'skipped' : 'played',
+        autoplayEnabled: flagsRef.current.autoplayEnabled,
       })
 
       if (result.excludeIds && rlsLocalRef.current) {
         excludeIdsRef.current = result.excludeIds
       }
-      if (result.rlsBlocked) {
-        rlsLocalRef.current = true
-      }
+      if (result.rlsBlocked) rlsLocalRef.current = true
 
       if (result.error && !result.playing && result.items.length === 0) {
         console.error('Error avanzando cola:', result.error)
@@ -146,7 +165,11 @@ export default function PlayerPage() {
 
       applyQueueState(result.items, result.playing)
       setPlayerNote(
-        result.playing ? null : 'Cola vacía — esperando pedidos'
+        result.playing
+          ? null
+          : flagsRef.current.autoplayEnabled
+            ? 'Cola vacía — buscando en catálogo…'
+            : 'Cola vacía — esperando pedidos'
       )
     } finally {
       advancingRef.current = false
@@ -160,11 +183,49 @@ export default function PlayerPage() {
         `YouTube no pudo reproducir este video (código ${code}). Saltando…`
       )
       window.setTimeout(() => {
-        void handleEnded()
+        void handleEnded(false)
       }, 1500)
     },
     [handleEnded]
   )
+
+  // Poll votos y saltar si umbral
+  useEffect(() => {
+    if (!playingItem?.id || !flagsRef.current.votingEnabled) {
+      setVoteStats(null)
+      return
+    }
+
+    let cancelled = false
+    const itemId = playingItem.id
+
+    async function checkVotes() {
+      try {
+        const res = await fetch(
+          `/api/votes?queueItemId=${encodeURIComponent(itemId)}`
+        )
+        const data = await res.json()
+        if (cancelled || !res.ok) return
+        setVoteStats({
+          up: data.up ?? 0,
+          down: data.down ?? 0,
+          downPercent: data.downPercent ?? 0,
+        })
+        if (data.shouldSkip && !advancingRef.current) {
+          void handleEnded(true)
+        }
+      } catch {
+        /* ignore */
+      }
+    }
+
+    void checkVotes()
+    const t = setInterval(checkVotes, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [playingItem?.id, handleEnded])
 
   useEffect(() => {
     if (!slug) return
@@ -176,6 +237,7 @@ export default function PlayerPage() {
     async function init() {
       setLoading(true)
       setError(null)
+      await loadFlags()
 
       const { data: venueData, error: venueError } = await supabase
         .from('venues')
@@ -205,14 +267,13 @@ export default function PlayerPage() {
       await refreshQueue(v.id, { promote: true })
       if (!cancelled) setLoading(false)
 
-      // Polling fiable (funciona aunque Realtime no esté habilitado)
       pollTimer = setInterval(() => {
         if (!advancingRef.current && venueIdRef.current) {
+          void loadFlags()
           void refreshQueue(venueIdRef.current, { promote: false })
         }
       }, POLL_MS)
 
-      // Realtime (bonus si está activo en Supabase)
       channel = supabase
         .channel(`player-queue-${v.id}`)
         .on(
@@ -245,11 +306,9 @@ export default function PlayerPage() {
     return () => {
       cancelled = true
       if (pollTimer) clearInterval(pollTimer)
-      if (channel) {
-        void supabase.removeChannel(channel)
-      }
+      if (channel) void supabase.removeChannel(channel)
     }
-  }, [slug, refreshQueue])
+  }, [slug, refreshQueue, loadFlags])
 
   if (loading) {
     return (
@@ -272,6 +331,7 @@ export default function PlayerPage() {
 
   const currentVideo = playingItem?.videos ?? null
   const waiting = queue.filter((i) => i.id !== playingItem?.id)
+  const isAutoplay = playingItem?.added_by_table?.includes('Autoplay')
 
   return (
     <div className="min-h-screen bg-black text-white p-4 md:p-6">
@@ -317,7 +377,7 @@ export default function PlayerPage() {
               key={playingItem?.id}
               videoId={currentVideo.youtube_id}
               title={currentVideo.title}
-              onEnded={handleEnded}
+              onEnded={() => handleEnded(false)}
               onError={handlePlayerError}
             />
           ) : (
@@ -326,24 +386,50 @@ export default function PlayerPage() {
               <p className="text-sm text-zinc-600 mt-2">
                 Escanea el QR y pide desde /join/{venue?.slug}
               </p>
+              {flagsRef.current.autoplayEnabled && (
+                <p className="text-xs text-emerald-600 mt-2">
+                  Autoplay música activo — cargará del catálogo
+                </p>
+              )}
             </div>
           )}
         </div>
 
         {currentVideo && (
           <div className="mb-6 rounded-2xl bg-emerald-950/40 border border-emerald-800 px-5 py-4">
-            <p className="text-emerald-400 text-xs tracking-[2px] uppercase">
-              Reproduciendo ahora
-            </p>
-            <h2 className="text-2xl font-semibold mt-1">{currentVideo.title}</h2>
-            {currentVideo.artist && (
-              <p className="text-zinc-400 mt-1">{currentVideo.artist}</p>
-            )}
-            {playingItem?.added_by_table && (
-              <p className="text-sm text-zinc-500 mt-2">
-                Pedido por {playingItem.added_by_table}
-              </p>
-            )}
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <p className="text-emerald-400 text-xs tracking-[2px] uppercase">
+                  {isAutoplay ? 'Autoplay · catálogo' : 'Reproduciendo ahora'}
+                </p>
+                <h2 className="text-2xl font-semibold mt-1">
+                  {currentVideo.title}
+                </h2>
+                {currentVideo.artist && (
+                  <p className="text-zinc-400 mt-1">{currentVideo.artist}</p>
+                )}
+                {playingItem?.added_by_table && (
+                  <p className="text-sm text-zinc-500 mt-2">
+                    {isAutoplay
+                      ? playingItem.added_by_table
+                      : `Pedido por ${playingItem.added_by_table}`}
+                  </p>
+                )}
+              </div>
+              {voteStats && (
+                <div className="text-right text-sm">
+                  <p className="text-zinc-400">Votos mesas</p>
+                  <p className="text-lg mt-1">
+                    <span className="text-emerald-400">👍 {voteStats.up}</span>
+                    {'  '}
+                    <span className="text-red-400">👎 {voteStats.down}</span>
+                  </p>
+                  <p className="text-xs text-zinc-500 mt-1">
+                    {voteStats.downPercent}% no me gusta
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
         )}
 

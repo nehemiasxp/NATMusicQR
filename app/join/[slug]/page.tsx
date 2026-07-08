@@ -28,6 +28,12 @@ type PublicConfig = {
     isOpen?: boolean
     hoursLabel?: string
   }
+  voting?: {
+    enabled: boolean
+    skipThresholdPercent: number
+    minVotesToSkip: number
+  }
+  autoplayMusic?: { enabled: boolean }
 }
 
 type SearchItem = {
@@ -82,6 +88,10 @@ export default function JoinPage() {
   const [apiKeyMissing, setApiKeyMissing] = useState(false)
   const [deviceId, setDeviceId] = useState('')
   const [rules, setRules] = useState<PublicConfig | null>(null)
+  const [voteUp, setVoteUp] = useState(0)
+  const [voteDown, setVoteDown] = useState(0)
+  const [myVote, setMyVote] = useState<'up' | 'down' | null>(null)
+  const [voteBusy, setVoteBusy] = useState(false)
 
   // Cargar sesión de mesa + deviceId + reglas
   useEffect(() => {
@@ -224,6 +234,69 @@ export default function JoinPage() {
 
   const playing = queue.find((item) => item.status === 'playing') ?? null
   const waiting = queue.filter((item) => item.status === 'queued')
+
+  // Cargar votos de la canción actual
+  useEffect(() => {
+    if (!playing?.id || !rules?.voting?.enabled || !deviceId) {
+      setVoteUp(0)
+      setVoteDown(0)
+      setMyVote(null)
+      return
+    }
+
+    let cancelled = false
+    async function loadVotes() {
+      try {
+        const res = await fetch(
+          `/api/votes?queueItemId=${encodeURIComponent(playing!.id)}&deviceId=${encodeURIComponent(deviceId)}`
+        )
+        const data = await res.json()
+        if (cancelled || !res.ok) return
+        setVoteUp(data.up ?? 0)
+        setVoteDown(data.down ?? 0)
+        setMyVote(data.myVote ?? null)
+      } catch {
+        /* ignore */
+      }
+    }
+
+    void loadVotes()
+    const t = setInterval(loadVotes, 3000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [playing?.id, rules?.voting?.enabled, deviceId])
+
+  async function castVote(vote: 'up' | 'down') {
+    if (!slug || !session || !playing?.id || !deviceId || voteBusy) return
+    setVoteBusy(true)
+    try {
+      const res = await fetch('/api/votes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venueSlug: slug,
+          queueItemId: playing.id,
+          deviceId,
+          vote,
+          accessPin: session.accessPin || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setMessage(data.error || 'No se pudo votar')
+        return
+      }
+      setVoteUp(data.up ?? 0)
+      setVoteDown(data.down ?? 0)
+      setMyVote(data.myVote ?? vote)
+    } catch {
+      setMessage('Error de red al votar')
+    } finally {
+      setVoteBusy(false)
+    }
+  }
 
   const filteredCatalog = useMemo(() => {
     const q = catalogQuery.trim().toLowerCase()
@@ -563,28 +636,71 @@ export default function JoinPage() {
             <span className="text-xs text-zinc-500">{waiting.length} en cola</span>
           </div>
           {playing?.videos ? (
-            <div className="flex gap-4 p-4 items-center">
-              {playing.videos.thumbnail_url && (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={playing.videos.thumbnail_url}
-                  alt=""
-                  className="w-20 h-14 object-cover rounded-lg shrink-0"
-                />
-              )}
-              <div className="min-w-0">
-                <p className="font-semibold truncate">{playing.videos.title}</p>
-                {playing.videos.artist && (
-                  <p className="text-sm text-zinc-400 truncate">
-                    {playing.videos.artist}
-                  </p>
+            <div className="p-4 space-y-3">
+              <div className="flex gap-4 items-center">
+                {playing.videos.thumbnail_url && (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={playing.videos.thumbnail_url}
+                    alt=""
+                    className="w-20 h-14 object-cover rounded-lg shrink-0"
+                  />
                 )}
-                {playing.added_by_table && (
-                  <p className="text-xs text-zinc-500 mt-1">
-                    Pedido por {playing.added_by_table}
-                  </p>
-                )}
+                <div className="min-w-0 flex-1">
+                  <p className="font-semibold truncate">{playing.videos.title}</p>
+                  {playing.videos.artist && (
+                    <p className="text-sm text-zinc-400 truncate">
+                      {playing.videos.artist}
+                    </p>
+                  )}
+                  {playing.added_by_table && (
+                    <p className="text-xs text-zinc-500 mt-1">
+                      {playing.added_by_table.includes('Autoplay')
+                        ? playing.added_by_table
+                        : `Pedido por ${playing.added_by_table}`}
+                    </p>
+                  )}
+                </div>
               </div>
+
+              {rules?.voting?.enabled && (
+                <div className="flex items-center justify-between gap-3 pt-1 border-t border-white/5">
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      disabled={voteBusy}
+                      onClick={() => castVote('up')}
+                      className={`rounded-full px-4 py-2 text-lg transition-colors ${
+                        myVote === 'up'
+                          ? 'bg-emerald-600 text-white'
+                          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                      }`}
+                      aria-label="Me gusta"
+                    >
+                      👍{' '}
+                      <span className="text-sm font-medium ml-1">{voteUp}</span>
+                    </button>
+                    <button
+                      type="button"
+                      disabled={voteBusy}
+                      onClick={() => castVote('down')}
+                      className={`rounded-full px-4 py-2 text-lg transition-colors ${
+                        myVote === 'down'
+                          ? 'bg-red-600 text-white'
+                          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                      }`}
+                      aria-label="No me gusta"
+                    >
+                      👎{' '}
+                      <span className="text-sm font-medium ml-1">{voteDown}</span>
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-zinc-500 text-right max-w-[9rem] leading-snug">
+                    Si 👎 ≥ {rules.voting.skipThresholdPercent}% (mín.{' '}
+                    {rules.voting.minVotesToSkip} votos) se salta
+                  </p>
+                </div>
+              )}
             </div>
           ) : (
             <p className="p-4 text-zinc-400 text-sm">

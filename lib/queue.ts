@@ -6,7 +6,6 @@ export type QueueError = {
   code?: string
   details?: string | null
   hint?: string | null
-  /** true = Supabase no aplicó el UPDATE (casi siempre RLS) */
   rlsBlocked?: boolean
 }
 
@@ -41,14 +40,86 @@ export async function fetchActiveQueue(venueId: string) {
   }
 }
 
+/** Elige un video activo al azar del catálogo del local. */
+export async function pickRandomCatalogVideo(venueId: string) {
+  const { data, error } = await supabase
+    .from('videos')
+    .select(
+      'id, youtube_id, title, artist, thumbnail_url, duration_seconds, category, is_active'
+    )
+    .eq('venue_id', venueId)
+    .eq('is_active', true)
+
+  if (error || !data?.length) {
+    return { video: null, error: error ? toError(error, 'Sin catálogo') : null }
+  }
+
+  const withYt = data.filter((v) => v.youtube_id)
+  if (!withYt.length) return { video: null, error: null }
+
+  const video = withYt[Math.floor(Math.random() * withYt.length)]
+  return { video, error: null }
+}
+
+/**
+ * Si no hay cola y autoplay está activo, inserta una canción random del catálogo
+ * como playing (added_by_table = Autoplay).
+ */
+export async function enqueueAutoplayIfEmpty(venueId: string) {
+  const { items, error } = await fetchActiveQueue(venueId)
+  if (error) return { items, playing: null as QueueItem | null, error, didAutoplay: false }
+  if (items.length > 0) {
+    const playing = items.find((i) => i.status === 'playing') ?? null
+    return { items, playing, error: null, didAutoplay: false }
+  }
+
+  const { video, error: catError } = await pickRandomCatalogVideo(venueId)
+  if (catError || !video) {
+    return {
+      items: [],
+      playing: null,
+      error: catError,
+      didAutoplay: false,
+    }
+  }
+
+  const { data: inserted, error: insertError } = await supabase
+    .from('queue_items')
+    .insert({
+      venue_id: venueId,
+      video_id: video.id,
+      status: 'playing',
+      played_at: new Date().toISOString(),
+      added_by_table: 'Autoplay 🎵',
+    })
+    .select(QUEUE_SELECT)
+    .single()
+
+  if (insertError || !inserted) {
+    return {
+      items: [],
+      playing: null,
+      error: toError(insertError, 'No se pudo iniciar autoplay'),
+      didAutoplay: false,
+    }
+  }
+
+  const item = inserted as unknown as QueueItem
+  return {
+    items: [item],
+    playing: item,
+    error: null,
+    didAutoplay: true,
+  }
+}
+
 /**
  * Asegura un item "playing".
- * Si RLS bloquea el UPDATE, devuelve el primer queued como playing local
- * (para que la TV reproduzca igual) y marca rlsBlocked.
+ * Si autoplayEnabled y no hay cola, llena con catálogo random.
  */
 export async function ensurePlayingItem(
   venueId: string,
-  options?: { excludeIds?: Set<string> }
+  options?: { excludeIds?: Set<string>; autoplayEnabled?: boolean }
 ) {
   const exclude = options?.excludeIds ?? new Set<string>()
   const { items, error } = await fetchActiveQueue(venueId)
@@ -64,7 +135,17 @@ export async function ensurePlayingItem(
 
   const next =
     visible.find((i) => i.status === 'queued' && i.videos?.youtube_id) ?? null
+
   if (!next) {
+    if (options?.autoplayEnabled) {
+      const auto = await enqueueAutoplayIfEmpty(venueId)
+      return {
+        items: auto.items,
+        playing: auto.playing,
+        error: auto.error,
+        rlsBlocked: false,
+      }
+    }
     return { items: visible, playing: null, error: null, rlsBlocked: false }
   }
 
@@ -79,7 +160,6 @@ export async function ensurePlayingItem(
     .select('id')
 
   if (updateError) {
-    // Reproduce localmente aunque falle el write
     const localPlaying = { ...next, status: 'playing' as const }
     return {
       items: visible.map((i) => (i.id === next.id ? localPlaying : i)),
@@ -89,7 +169,6 @@ export async function ensurePlayingItem(
     }
   }
 
-  // RLS a veces devuelve 200 sin error y 0 filas → el status no cambió
   if (!updated || updated.length === 0) {
     const localPlaying = { ...next, status: 'playing' as const }
     return {
@@ -117,27 +196,33 @@ const RLS_HINT =
   'Supabase bloqueó el UPDATE de queue_items (RLS). Agrega políticas de INSERT/UPDATE. La TV reproducirá en modo local.'
 
 /**
- * Marca el actual como played y arranca el siguiente.
- * Si RLS bloquea writes, excluye el id actual y avanza en local.
+ * Marca el actual como played/skipped y arranca el siguiente (o autoplay).
  */
 export async function advanceQueue(
   venueId: string,
   currentItemId: string,
-  options?: { excludeIds?: Set<string> }
+  options?: {
+    excludeIds?: Set<string>
+    status?: 'played' | 'skipped'
+    autoplayEnabled?: boolean
+  }
 ) {
   const exclude = new Set(options?.excludeIds ?? [])
+  const endStatus = options?.status ?? 'played'
 
   const { data: updated, error: doneError } = await supabase
     .from('queue_items')
-    .update({ status: 'played' })
+    .update({ status: endStatus })
     .eq('id', currentItemId)
     .in('status', ['playing', 'queued'])
     .select('id')
 
   if (doneError || !updated || updated.length === 0) {
-    // Avance local: no volvemos a tocar este id en esta sesión
     exclude.add(currentItemId)
-    const result = await ensurePlayingItem(venueId, { excludeIds: exclude })
+    const result = await ensurePlayingItem(venueId, {
+      excludeIds: exclude,
+      autoplayEnabled: options?.autoplayEnabled,
+    })
     return {
       ...result,
       excludeIds: exclude,
@@ -146,15 +231,16 @@ export async function advanceQueue(
         result.error ??
         toError(
           doneError,
-          doneError
-            ? doneError.message
-            : RLS_HINT,
+          doneError ? doneError.message : RLS_HINT,
           { rlsBlocked: true, code: doneError?.code ?? 'RLS_NO_UPDATE' }
         ),
     }
   }
 
-  const result = await ensurePlayingItem(venueId, { excludeIds: exclude })
+  const result = await ensurePlayingItem(venueId, {
+    excludeIds: exclude,
+    autoplayEnabled: options?.autoplayEnabled,
+  })
   return { ...result, excludeIds: exclude }
 }
 
@@ -169,6 +255,42 @@ export async function isVideoAlreadyInQueue(venueId: string, videoId: string) {
 
   if (error) return { exists: false, error: toError(error, 'No se pudo verificar la cola') }
   return { exists: (data?.length ?? 0) > 0, error: null }
+}
+
+export type VoteTally = {
+  up: number
+  down: number
+  total: number
+  downPercent: number
+  myVote: 'up' | 'down' | null
+  shouldSkip: boolean
+}
+
+export function tallyVotes(
+  votes: Array<{ vote: string; device_id?: string }>,
+  opts: {
+    deviceId?: string | null
+    skipThresholdPercent: number
+    minVotesToSkip: number
+  }
+): VoteTally {
+  let up = 0
+  let down = 0
+  let myVote: 'up' | 'down' | null = null
+  for (const v of votes) {
+    if (v.vote === 'up') up++
+    if (v.vote === 'down') down++
+    if (opts.deviceId && v.device_id === opts.deviceId) {
+      myVote = v.vote === 'up' || v.vote === 'down' ? v.vote : null
+    }
+  }
+  const total = up + down
+  const downPercent = total === 0 ? 0 : Math.round((down / total) * 100)
+  const shouldSkip =
+    total >= opts.minVotesToSkip &&
+    downPercent >= opts.skipThresholdPercent
+
+  return { up, down, total, downPercent, myVote, shouldSkip }
 }
 
 export { RLS_HINT }

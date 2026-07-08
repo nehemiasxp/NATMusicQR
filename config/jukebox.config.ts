@@ -10,18 +10,26 @@ export type LimitRule = {
 }
 
 export type AccessConfig = {
-  /** Exigir PIN del local al entrar / pedir */
   pinEnabled: boolean
-  /** PIN del local (solo se guarda en DB/admin; no se expone al público) */
   pin: string
-  /** Restringir por horario de atención */
   hoursEnabled: boolean
-  /** IANA timezone, ej. America/Lima, America/Mexico_City */
   timezone: string
-  /** HH:mm apertura */
   openTime: string
-  /** HH:mm cierre (puede ser menor que open = cruza medianoche, ej. 02:00) */
   closeTime: string
+}
+
+export type AutoplayMusicConfig = {
+  /** Si la cola está vacía, reproduce canciones del catálogo al azar */
+  enabled: boolean
+}
+
+export type VotingConfig = {
+  /** Mostrar 👍 / 👎 en mesas y permitir saltar por votos negativos */
+  enabled: boolean
+  /** % de votos "no me gusta" para saltar (ej. 80) */
+  skipThresholdPercent: number
+  /** Mínimo de votos totales antes de poder saltar */
+  minVotesToSkip: number
 }
 
 export type RuntimeJukeboxConfig = {
@@ -31,6 +39,8 @@ export type RuntimeJukeboxConfig = {
   perIp: LimitRule
   blockDuplicateInQueue: boolean
   access: AccessConfig
+  autoplayMusic: AutoplayMusicConfig
+  voting: VotingConfig
   ui: {
     showQueueOnJoin: boolean
     pollIntervalMs: number
@@ -63,6 +73,14 @@ export const defaultJukeboxConfig: RuntimeJukeboxConfig = {
     openTime: '18:00',
     closeTime: '02:00',
   },
+  autoplayMusic: {
+    enabled: false,
+  },
+  voting: {
+    enabled: true,
+    skipThresholdPercent: 80,
+    minVotesToSkip: 2,
+  },
   ui: {
     showQueueOnJoin: true,
     pollIntervalMs: 3000,
@@ -92,6 +110,8 @@ export function publicJukeboxConfig(cfg: RuntimeJukeboxConfig = defaultJukeboxCo
       openTime: cfg.access.openTime,
       closeTime: cfg.access.closeTime,
     },
+    autoplayMusic: cfg.autoplayMusic,
+    voting: cfg.voting,
     ui: cfg.ui,
   }
 }
@@ -109,6 +129,8 @@ export function mergeJukeboxConfig(
 ): RuntimeJukeboxConfig {
   const p = partial ?? {}
   const accessPartial: Partial<AccessConfig> = p.access ?? {}
+  const autoplayPartial: Partial<AutoplayMusicConfig> = p.autoplayMusic ?? {}
+  const votingPartial: Partial<VotingConfig> = p.voting ?? {}
   return {
     maxDurationSeconds:
       typeof p.maxDurationSeconds === 'number' && p.maxDurationSeconds > 0
@@ -172,6 +194,25 @@ export function mergeJukeboxConfig(
       closeTime: normalizeTime(
         accessPartial.closeTime,
         defaultJukeboxConfig.access.closeTime
+      ),
+    },
+    autoplayMusic: {
+      enabled:
+        autoplayPartial.enabled ?? defaultJukeboxConfig.autoplayMusic.enabled,
+    },
+    voting: {
+      enabled: votingPartial.enabled ?? defaultJukeboxConfig.voting.enabled,
+      skipThresholdPercent: clampInt(
+        votingPartial.skipThresholdPercent,
+        1,
+        100,
+        defaultJukeboxConfig.voting.skipThresholdPercent
+      ),
+      minVotesToSkip: clampInt(
+        votingPartial.minVotesToSkip,
+        1,
+        100,
+        defaultJukeboxConfig.voting.minVotesToSkip
       ),
     },
     ui: {
