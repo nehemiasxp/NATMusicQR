@@ -43,7 +43,10 @@ type SearchItem = {
   thumbnailUrl: string | null
 }
 
-type Tab = 'catalog' | 'search'
+/** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
+export const JOIN_UI_VERSION = '2.1.0'
+
+type Tab = 'queue' | 'local' | 'add'
 
 function formatDuration(seconds: number | null | undefined) {
   if (!seconds || seconds <= 0) return null
@@ -78,7 +81,7 @@ export default function JoinPage() {
 
   const [addingKey, setAddingKey] = useState<string | null>(null)
   const [message, setMessage] = useState<string | null>(null)
-  const [tab, setTab] = useState<Tab>('catalog')
+  const [tab, setTab] = useState<Tab>('queue')
 
   const [catalogQuery, setCatalogQuery] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
@@ -602,59 +605,76 @@ export default function JoinPage() {
   }
 
   // ——— Jukebox (ya con mesa) ———
+  const tabs: { id: Tab; label: string; short: string }[] = [
+    { id: 'queue', label: `En cola (${waiting.length})`, short: 'Cola' },
+    { id: 'local', label: 'Músicas del Local', short: 'Local' },
+    { id: 'add', label: '+ Añadir Música', short: '+ Añadir' },
+  ]
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-white">
-      <div className="max-w-3xl mx-auto px-4 py-6 pb-24">
+    <div className="min-h-screen bg-[#07080a] font-[family-name:var(--font-geist-sans)] text-zinc-100 antialiased">
+      <div className="mx-auto max-w-3xl px-4 py-5 pb-28">
         <header className="mb-4 flex items-start justify-between gap-3">
-          <div>
-            <p className="text-emerald-400 text-xs tracking-[2px] uppercase font-medium">
-              Jukebox · {venue?.slug}
-            </p>
-            <h1 className="text-2xl font-bold mt-1">{venue?.name}</h1>
+          <div className="min-w-0">
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
+                {venue?.slug}
+              </p>
+              <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300/90 ring-1 ring-emerald-500/25">
+                v{JOIN_UI_VERSION}
+              </span>
+            </div>
+            <h1 className="mt-1 truncate text-xl font-semibold tracking-tight text-white">
+              {venue?.name}
+            </h1>
           </div>
-          <div className="text-right shrink-0">
-            <div className="rounded-full bg-emerald-950 border border-emerald-800 px-3 py-1.5 text-sm">
+          <div className="shrink-0 text-right">
+            <div className="rounded-full border border-emerald-800/60 bg-emerald-950/50 px-3 py-1.5 text-sm">
               <span className="text-emerald-400">🪑 </span>
               {formatTableLabel(session)}
             </div>
             <button
               type="button"
               onClick={handleChangeMesa}
-              className="text-xs text-zinc-500 hover:text-zinc-300 mt-1"
+              className="mt-1 text-xs text-zinc-500 hover:text-zinc-300"
             >
               Cambiar mesa
             </button>
           </div>
         </header>
 
-        {/* Now playing */}
-        <section className="mb-6 rounded-2xl overflow-hidden border border-zinc-800 bg-gradient-to-br from-emerald-950/80 to-zinc-900">
-          <div className="px-4 py-3 border-b border-white/5 flex items-center justify-between">
-            <p className="text-emerald-400 text-xs tracking-[2px] uppercase">
+        {/* Ahora suena (siempre visible) */}
+        <section className="mb-4 overflow-hidden rounded-2xl border border-zinc-800/90 bg-gradient-to-br from-emerald-950/70 to-zinc-900/80">
+          <div className="flex items-center justify-between border-b border-white/5 px-4 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-emerald-400">
               Ahora suena
             </p>
-            <span className="text-xs text-zinc-500">{waiting.length} en cola</span>
+            <span className="text-xs text-zinc-500">
+              {waiting.length} en cola
+            </span>
           </div>
           {playing?.videos ? (
-            <div className="p-4 space-y-3">
-              <div className="flex gap-4 items-center">
+            <div className="space-y-3 p-4">
+              <div className="flex items-center gap-3">
                 {playing.videos.thumbnail_url && (
                   // eslint-disable-next-line @next/next/no-img-element
                   <img
                     src={playing.videos.thumbnail_url}
                     alt=""
-                    className="w-20 h-14 object-cover rounded-lg shrink-0"
+                    className="h-14 w-20 shrink-0 rounded-lg object-cover"
                   />
                 )}
                 <div className="min-w-0 flex-1">
-                  <p className="font-semibold truncate">{playing.videos.title}</p>
+                  <p className="truncate font-semibold text-zinc-50">
+                    {playing.videos.title}
+                  </p>
                   {playing.videos.artist && (
-                    <p className="text-sm text-zinc-400 truncate">
+                    <p className="truncate text-sm text-zinc-400">
                       {playing.videos.artist}
                     </p>
                   )}
                   {playing.added_by_table && (
-                    <p className="text-xs text-zinc-500 mt-1">
+                    <p className="mt-0.5 text-xs text-zinc-500">
                       {playing.added_by_table.includes('Autoplay')
                         ? playing.added_by_table
                         : `Pedido por ${playing.added_by_table}`}
@@ -664,105 +684,74 @@ export default function JoinPage() {
               </div>
 
               {rules?.voting?.enabled && (
-                <div className="flex items-center justify-between gap-3 pt-1 border-t border-white/5">
+                <div className="flex items-center justify-between gap-3 border-t border-white/5 pt-3">
                   <div className="flex gap-2">
                     <button
                       type="button"
                       disabled={voteBusy}
                       onClick={() => castVote('up')}
-                      className={`rounded-full px-4 py-2 text-lg transition-colors ${
+                      className={`rounded-full px-3.5 py-1.5 text-base transition ${
                         myVote === 'up'
                           ? 'bg-emerald-600 text-white'
-                          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                          : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
                       }`}
                       aria-label="Me gusta"
                     >
                       👍{' '}
-                      <span className="text-sm font-medium ml-1">{voteUp}</span>
+                      <span className="ml-0.5 text-sm font-medium">{voteUp}</span>
                     </button>
                     <button
                       type="button"
                       disabled={voteBusy}
                       onClick={() => castVote('down')}
-                      className={`rounded-full px-4 py-2 text-lg transition-colors ${
+                      className={`rounded-full px-3.5 py-1.5 text-base transition ${
                         myVote === 'down'
                           ? 'bg-red-600 text-white'
-                          : 'bg-zinc-800 hover:bg-zinc-700 text-zinc-200'
+                          : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
                       }`}
                       aria-label="No me gusta"
                     >
                       👎{' '}
-                      <span className="text-sm font-medium ml-1">{voteDown}</span>
+                      <span className="ml-0.5 text-sm font-medium">
+                        {voteDown}
+                      </span>
                     </button>
                   </div>
-                  <p className="text-[10px] text-zinc-500 text-right max-w-[9rem] leading-snug">
-                    Si 👎 ≥ {rules.voting.skipThresholdPercent}% (mín.{' '}
-                    {rules.voting.minVotesToSkip} votos) se salta
+                  <p className="max-w-[8.5rem] text-right text-[10px] leading-snug text-zinc-500">
+                    👎 ≥ {rules.voting.skipThresholdPercent}% (mín.{' '}
+                    {rules.voting.minVotesToSkip}) salta
                   </p>
                 </div>
               )}
             </div>
           ) : (
-            <p className="p-4 text-zinc-400 text-sm">
-              Nadie está reproduciendo todavía. ¡Sé el primero!
+            <p className="p-4 text-sm text-zinc-400">
+              Nadie está reproduciendo. ¡Sé el primero!
             </p>
-          )}
-
-          {waiting.length > 0 && (
-            <div className="px-4 pb-4">
-              <p className="text-xs text-zinc-500 mb-2 uppercase tracking-wide">
-                Próximas
-              </p>
-              <div className="space-y-1">
-                {waiting.slice(0, 5).map((item, i) => (
-                  <div
-                    key={item.id}
-                    className="flex items-center gap-2 text-sm text-zinc-300"
-                  >
-                    <span className="text-zinc-600 w-4">{i + 1}.</span>
-                    <span className="truncate flex-1">
-                      {item.videos?.title ?? 'Canción'}
-                    </span>
-                    {item.added_by_table && (
-                      <span className="text-xs text-zinc-600 shrink-0">
-                        {item.added_by_table}
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
           )}
         </section>
 
-        {/* Tabs */}
-        <div className="flex gap-2 mb-4 p-1 rounded-xl bg-zinc-900 border border-zinc-800">
-          <button
-            type="button"
-            onClick={() => setTab('catalog')}
-            className={`flex-1 rounded-lg py-2.5 text-sm font-medium transition-colors ${
-              tab === 'catalog'
-                ? 'bg-emerald-600 text-white'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-          >
-            Del local ({videos.length})
-          </button>
-          <button
-            type="button"
-            onClick={() => setTab('search')}
-            className={`flex-1 rounded-lg py-2.5 text-sm font-medium transition-colors ${
-              tab === 'search'
-                ? 'bg-emerald-600 text-white'
-                : 'text-zinc-400 hover:text-white'
-            }`}
-          >
-            Buscar YouTube
-          </button>
+        {/* 3 pestañas */}
+        <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl border border-zinc-800/90 bg-zinc-900/60 p-1">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`rounded-lg px-1.5 py-2.5 text-center text-[11px] font-semibold leading-tight transition sm:text-xs ${
+                tab === t.id
+                  ? 'bg-emerald-500 text-zinc-950 shadow-sm'
+                  : 'text-zinc-400 hover:text-zinc-200'
+              }`}
+            >
+              <span className="sm:hidden">{t.short}</span>
+              <span className="hidden sm:inline">{t.label}</span>
+            </button>
+          ))}
         </div>
 
         {rules && (
-          <p className="mb-3 text-xs text-zinc-500">
+          <p className="mb-3 text-[11px] text-zinc-500">
             Máx. {Math.round(rules.maxDurationSeconds / 60)} min
             {rules.perDevice.enabled &&
               ` · ${rules.perDevice.maxSongs}/celular cada ${rules.perDevice.windowMinutes} min`}
@@ -772,51 +761,110 @@ export default function JoinPage() {
         )}
 
         {apiKeyMissing && (
-          <div className="mb-4 rounded-xl border border-amber-800 bg-amber-950/40 px-4 py-3 text-amber-100 text-sm">
-            Falta o falló YOUTUBE_API_KEY. Usa el catálogo del local.
+          <div className="mb-3 rounded-xl border border-amber-800/60 bg-amber-950/40 px-3 py-2.5 text-sm text-amber-100">
+            Falta YOUTUBE_API_KEY. Usa el catálogo local.
           </div>
         )}
 
         {message && (
           <div
-            className={`mb-4 rounded-xl px-4 py-3 text-sm ${
+            className={`mb-3 rounded-xl px-3 py-2.5 text-sm ${
               message.startsWith('Error') || message.includes('ya está')
-                ? 'border border-amber-800 bg-amber-950/40 text-amber-200'
-                : 'border border-emerald-800 bg-emerald-950/40 text-emerald-300'
+                ? 'border border-amber-800/60 bg-amber-950/40 text-amber-100'
+                : 'border border-emerald-800/50 bg-emerald-950/30 text-emerald-200'
             }`}
           >
             {message}
           </div>
         )}
 
-        {tab === 'catalog' ? (
+        {/* ——— EN COLA ——— */}
+        {tab === 'queue' && (
           <div>
-            <label className="block mb-4">
-              <span className="text-sm text-zinc-400">Filtrar catálogo</span>
+            <h2 className="mb-3 text-sm font-semibold tracking-tight text-zinc-200">
+              Próximas a reproducir
+            </h2>
+            {waiting.length === 0 ? (
+              <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 px-4 py-8 text-center">
+                <p className="text-sm text-zinc-400">La cola está vacía</p>
+                <button
+                  type="button"
+                  onClick={() => setTab('local')}
+                  className="mt-3 text-sm font-medium text-emerald-400 hover:text-emerald-300"
+                >
+                  Ver músicas del local →
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-2">
+                {waiting.map((item, index) => (
+                  <div
+                    key={item.id}
+                    className="flex items-center gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3"
+                  >
+                    <span className="w-7 shrink-0 text-center font-[family-name:var(--font-geist-mono)] text-lg text-zinc-600">
+                      {index + 1}
+                    </span>
+                    {item.videos?.thumbnail_url && (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={item.videos.thumbnail_url}
+                        alt=""
+                        className="h-11 w-16 shrink-0 rounded-md object-cover"
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-zinc-100">
+                        {item.videos?.title ?? 'Canción'}
+                      </p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {item.videos?.artist ?? ''}
+                        {item.added_by_table
+                          ? ` · ${item.added_by_table}`
+                          : ''}
+                      </p>
+                    </div>
+                    <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] font-medium text-zinc-400">
+                      En cola
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
+
+        {/* ——— MÚSICAS DEL LOCAL ——— */}
+        {tab === 'local' && (
+          <div>
+            <label className="mb-3 block">
+              <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                Filtrar catálogo
+              </span>
               <input
                 type="search"
                 value={catalogQuery}
                 onChange={(e) => setCatalogQuery(e.target.value)}
-                className="mt-1 w-full rounded-xl bg-zinc-900 border border-zinc-700 px-4 py-3 outline-none focus:border-emerald-500"
+                className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-zinc-900/80 px-4 py-2.5 text-sm outline-none focus:border-emerald-500/50"
                 placeholder="Título, artista…"
               />
             </label>
 
             {filteredCatalog.length === 0 ? (
-              <div className="rounded-2xl border border-zinc-800 bg-zinc-900/50 p-6 text-center">
-                <p className="text-zinc-400">
-                  No hay canciones en el catálogo del local.
+              <div className="rounded-2xl border border-zinc-800/80 bg-zinc-900/40 px-4 py-8 text-center">
+                <p className="text-sm text-zinc-400">
+                  No hay canciones en el catálogo.
                 </p>
                 <button
                   type="button"
-                  onClick={() => setTab('search')}
-                  className="mt-3 text-emerald-400 text-sm hover:underline"
+                  onClick={() => setTab('add')}
+                  className="mt-3 text-sm font-medium text-emerald-400 hover:text-emerald-300"
                 >
-                  Buscar en YouTube →
+                  + Añadir música →
                 </button>
               </div>
             ) : (
-              <div className="space-y-3">
+              <div className="space-y-2">
                 {filteredCatalog.map((video) => {
                   const inQueue = queuedVideoIds.has(video.id)
                   const duration = formatDuration(video.duration_seconds)
@@ -825,24 +873,26 @@ export default function JoinPage() {
                   return (
                     <div
                       key={video.id}
-                      className="flex items-center gap-3 p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800"
+                      className="flex items-center gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3"
                     >
                       {video.thumbnail_url && (
                         // eslint-disable-next-line @next/next/no-img-element
                         <img
                           src={video.thumbnail_url}
                           alt=""
-                          className="w-20 h-14 object-cover rounded-lg shrink-0"
+                          className="h-12 w-[4.5rem] shrink-0 rounded-md object-cover"
                         />
                       )}
-                      <div className="flex-1 min-w-0">
-                        <p className="font-medium truncate">{video.title}</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium">
+                          {video.title}
+                        </p>
                         {video.artist && (
-                          <p className="text-sm text-zinc-400 truncate">
+                          <p className="truncate text-xs text-zinc-400">
                             {video.artist}
                           </p>
                         )}
-                        <div className="flex gap-2 mt-1 text-xs text-zinc-500">
+                        <div className="mt-0.5 flex gap-2 text-[11px] text-zinc-600">
                           {video.category && <span>{video.category}</span>}
                           {duration && <span>· {duration}</span>}
                         </div>
@@ -857,12 +907,12 @@ export default function JoinPage() {
                             youtubeId: video.youtube_id,
                           })
                         }
-                        className="shrink-0 rounded-full px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-400"
+                        className="shrink-0 rounded-full bg-emerald-500 px-3.5 py-1.5 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:bg-zinc-700 disabled:text-zinc-400"
                       >
                         {inQueue
                           ? 'En cola'
                           : addingKey === key
-                            ? '...'
+                            ? '…'
                             : 'Pedir'}
                       </button>
                     </div>
@@ -871,58 +921,76 @@ export default function JoinPage() {
               </div>
             )}
           </div>
-        ) : (
+        )}
+
+        {/* ——— + AÑADIR MÚSICA (YouTube) ——— */}
+        {tab === 'add' && (
           <div>
-            <form onSubmit={runSearch} className="mb-4 space-y-2">
-              <label className="block">
-                <span className="text-sm text-zinc-400">
-                  Busca o pega un link de YouTube
-                </span>
-                <input
-                  type="search"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  className="mt-1 w-full rounded-xl bg-zinc-900 border border-zinc-700 px-4 py-3 outline-none focus:border-emerald-500"
-                  placeholder="Ej: saqra carnaval, o https://youtu.be/..."
-                />
-              </label>
-              <button
-                type="submit"
-                disabled={searching}
-                className="w-full rounded-xl bg-zinc-100 text-zinc-900 font-semibold py-3 hover:bg-white disabled:opacity-50"
-              >
-                {searching ? 'Buscando…' : 'Buscar'}
-              </button>
-              <p className="text-xs text-zinc-500">
-                Validamos embed, duración y que no sea live antes de encolar.
+            <div className="mb-4 rounded-2xl border border-zinc-800/90 bg-zinc-900/40 p-4">
+              <h2 className="text-sm font-semibold text-zinc-100">
+                Añadir música
+              </h2>
+              <p className="mt-1 text-xs leading-relaxed text-zinc-500">
+                Busca en YouTube o pega un enlace. Validamos embed y duración
+                antes de encolar.
               </p>
-            </form>
+
+              <form onSubmit={runSearch} className="mt-4 space-y-2.5">
+                <label className="block">
+                  <span className="text-[11px] font-medium uppercase tracking-wide text-zinc-500">
+                    Buscar en YouTube
+                  </span>
+                  <input
+                    type="search"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="mt-1.5 w-full rounded-xl border border-zinc-800 bg-zinc-950/80 px-4 py-2.5 text-sm outline-none focus:border-emerald-500/50"
+                    placeholder="Canción, artista o https://youtu.be/…"
+                  />
+                </label>
+                <button
+                  type="submit"
+                  disabled={searching}
+                  className="w-full rounded-xl bg-white py-2.5 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-100 disabled:opacity-50"
+                >
+                  {searching ? 'Buscando…' : 'Buscar en YouTube'}
+                </button>
+              </form>
+            </div>
 
             {searchError && (
               <p className="mb-3 text-sm text-amber-300">{searchError}</p>
             )}
 
-            <div className="space-y-3">
+            {searchResults.length > 0 && (
+              <h3 className="mb-2 text-xs font-medium uppercase tracking-wide text-zinc-500">
+                Resultados
+              </h3>
+            )}
+
+            <div className="space-y-2">
               {searchResults.map((item) => {
                 const inQueue = queuedYoutubeIds.has(item.youtubeId)
                 const key = `yt-${item.youtubeId}`
                 return (
                   <div
                     key={item.youtubeId}
-                    className="flex items-center gap-3 p-3 rounded-2xl bg-zinc-900/80 border border-zinc-800"
+                    className="flex items-center gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/50 p-3"
                   >
                     {item.thumbnailUrl && (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img
                         src={item.thumbnailUrl}
                         alt=""
-                        className="w-20 h-14 object-cover rounded-lg shrink-0"
+                        className="h-12 w-[4.5rem] shrink-0 rounded-md object-cover"
                       />
                     )}
-                    <div className="flex-1 min-w-0">
-                      <p className="font-medium truncate">{item.title}</p>
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium">
+                        {item.title}
+                      </p>
                       {item.channelTitle && (
-                        <p className="text-sm text-zinc-400 truncate">
+                        <p className="truncate text-xs text-zinc-400">
                           {item.channelTitle}
                         </p>
                       )}
@@ -936,12 +1004,12 @@ export default function JoinPage() {
                           youtubeId: item.youtubeId,
                         })
                       }
-                      className="shrink-0 rounded-full px-4 py-2 text-sm font-medium transition-colors disabled:opacity-50 bg-emerald-600 hover:bg-emerald-500 disabled:bg-zinc-700 disabled:text-zinc-400"
+                      className="shrink-0 rounded-full bg-emerald-500 px-3.5 py-1.5 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:bg-zinc-700 disabled:text-zinc-400"
                     >
                       {inQueue
                         ? 'En cola'
                         : addingKey === key
-                          ? 'Validando…'
+                          ? '…'
                           : 'Pedir'}
                     </button>
                   </div>
@@ -950,6 +1018,10 @@ export default function JoinPage() {
             </div>
           </div>
         )}
+
+        <p className="mt-8 text-center text-[10px] text-zinc-700">
+          Join UI v{JOIN_UI_VERSION}
+        </p>
       </div>
     </div>
   )
