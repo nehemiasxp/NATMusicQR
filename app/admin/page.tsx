@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import type { RuntimeJukeboxConfig } from '@/config/jukebox.config'
 
@@ -29,9 +29,68 @@ const emptyConfig: RuntimeJukeboxConfig = {
   ui: { showQueueOnJoin: true, pollIntervalMs: 3000 },
 }
 
-function qrImageUrl(data: string, size = 160) {
-  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&data=${encodeURIComponent(data)}`
+type TabId = 'rules' | 'qr' | 'security'
+
+function qrImageUrl(data: string, size = 140) {
+  return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=8&data=${encodeURIComponent(data)}`
 }
+
+function Toggle({
+  checked,
+  onChange,
+  label,
+}: {
+  checked: boolean
+  onChange: (v: boolean) => void
+  label?: string
+}) {
+  return (
+    <button
+      type="button"
+      role="switch"
+      aria-checked={checked}
+      aria-label={label}
+      onClick={() => onChange(!checked)}
+      className={`relative h-6 w-11 shrink-0 rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-emerald-500/60 ${
+        checked ? 'bg-emerald-500' : 'bg-zinc-700'
+      }`}
+    >
+      <span
+        className={`absolute top-0.5 left-0.5 h-5 w-5 rounded-full bg-white shadow-sm transition-transform duration-200 ${
+          checked ? 'translate-x-5' : 'translate-x-0'
+        }`}
+      />
+    </button>
+  )
+}
+
+function Field({
+  label,
+  hint,
+  children,
+  className = '',
+}: {
+  label: string
+  hint?: string
+  children: ReactNode
+  className?: string
+}) {
+  return (
+    <label className={`block min-w-0 ${className}`}>
+      <span className="block text-[11px] font-medium uppercase tracking-[0.08em] text-zinc-500">
+        {label}
+      </span>
+      <div className="mt-1.5">{children}</div>
+      {hint ? <span className="mt-1 block text-[11px] leading-snug text-zinc-600">{hint}</span> : null}
+    </label>
+  )
+}
+
+const inputClass =
+  'w-full rounded-lg border border-zinc-800/90 bg-zinc-950/80 px-3 py-2 text-sm text-zinc-100 outline-none transition placeholder:text-zinc-600 focus:border-emerald-500/50 focus:ring-1 focus:ring-emerald-500/30 disabled:cursor-not-allowed disabled:opacity-40'
+
+const cardClass =
+  'rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-4 shadow-[0_0_0_1px_rgba(255,255,255,0.02)_inset]'
 
 export default function AdminPage() {
   const [password, setPassword] = useState('')
@@ -41,15 +100,14 @@ export default function AdminPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [tab, setTab] = useState<TabId>('rules')
 
-  // QR generator
   const [baseUrl, setBaseUrl] = useState('')
   const [venueSlug, setVenueSlug] = useState('natmusicqr')
   const [tableCount, setTableCount] = useState(12)
   const [tableStart, setTableStart] = useState(1)
   const [copied, setCopied] = useState<string | null>(null)
 
-  // Cambio de contraseña
   const [currentPwd, setCurrentPwd] = useState('')
   const [newPwd, setNewPwd] = useState('')
   const [confirmPwd, setConfirmPwd] = useState('')
@@ -58,9 +116,7 @@ export default function AdminPage() {
   const [pwdError, setPwdError] = useState<string | null>(null)
 
   useEffect(() => {
-    if (typeof window !== 'undefined') {
-      setBaseUrl(window.location.origin)
-    }
+    if (typeof window !== 'undefined') setBaseUrl(window.location.origin)
     const saved = sessionStorage.getItem(STORAGE_KEY)
     if (saved) {
       setPassword(saved)
@@ -127,12 +183,11 @@ export default function AdminPage() {
     await loadConfig(password.trim())
   }
 
-  async function handleSave(e: React.FormEvent) {
-    e.preventDefault()
+  async function handleSave(e?: React.FormEvent) {
+    e?.preventDefault()
     setSaving(true)
     setError(null)
     setMessage(null)
-    // Asegurar que autoplay/voting siempre viajen al guardar
     const payload: RuntimeJukeboxConfig = {
       ...emptyConfig,
       ...config,
@@ -171,9 +226,9 @@ export default function AdminPage() {
         voting: { ...emptyConfig.voting, ...data.config?.voting },
       })
       setMessage(
-        `Reglas guardadas. Autoplay: ${
+        `Guardado · Autoplay ${
           data.config?.autoplayMusic?.enabled ? 'ON' : 'OFF'
-        }. Recarga la TV.`
+        } · recarga la TV`
       )
     } catch {
       setError('Error de red al guardar')
@@ -213,7 +268,6 @@ export default function AdminPage() {
         )
         return
       }
-      // Actualizar sesión con la nueva clave
       setPassword(newPwd)
       sessionStorage.setItem(STORAGE_KEY, newPwd)
       setCurrentPwd('')
@@ -242,658 +296,719 @@ export default function AdminPage() {
     void copyText(text, 'all')
   }
 
+  /* ——— Login ——— */
   if (!authed) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-4">
-        <form
-          onSubmit={handleLogin}
-          className="w-full max-w-sm space-y-4 rounded-2xl border border-zinc-800 bg-zinc-900 p-6"
-        >
-          <div>
-            <p className="text-emerald-400 text-xs tracking-[2px] uppercase">
-              NATMusicQR
-            </p>
-            <h1 className="text-2xl font-bold mt-1">Admin</h1>
-            <p className="text-sm text-zinc-400 mt-1">
-              Reglas + códigos QR por mesa
-            </p>
-          </div>
-          <label className="block">
-            <span className="text-sm text-zinc-400">Contraseña</span>
-            <input
-              type="password"
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 outline-none focus:border-emerald-500"
-              placeholder="ADMIN_PASSWORD"
-              autoFocus
-            />
-          </label>
-          {error && <p className="text-sm text-red-400">{error}</p>}
-          <button
-            type="submit"
-            disabled={loading}
-            className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold py-3 disabled:opacity-50"
+      <div className="relative min-h-screen overflow-hidden bg-[#07080a] font-[family-name:var(--font-geist-sans)] text-zinc-100">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(16,185,129,0.12),_transparent_55%)]" />
+        <div className="relative flex min-h-screen items-center justify-center p-5">
+          <form
+            onSubmit={handleLogin}
+            className="w-full max-w-[380px] rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-7 shadow-2xl backdrop-blur-xl"
           >
-            {loading ? 'Entrando…' : 'Entrar'}
-          </button>
-          <p className="text-xs text-zinc-500">
-            Clave actual:{' '}
-            <code className="text-emerald-400">natmusicqr-admin</code>
-          </p>
-          <Link
-            href="/"
-            className="block text-center text-sm text-zinc-500 hover:text-zinc-300"
-          >
-            ← Inicio
-          </Link>
-        </form>
+            <div className="mb-6">
+              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-400/90">
+                NATMusicQR
+              </p>
+              <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
+                Panel de control
+              </h1>
+              <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">
+                Configuración del jukebox, QR y seguridad
+              </p>
+            </div>
+            <Field label="Contraseña">
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                className={inputClass}
+                placeholder="••••••••"
+                autoFocus
+              />
+            </Field>
+            {error && (
+              <p className="mt-3 text-sm text-red-400">{error}</p>
+            )}
+            <button
+              type="submit"
+              disabled={loading}
+              className="mt-5 w-full rounded-lg bg-emerald-500 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50"
+            >
+              {loading ? 'Verificando…' : 'Entrar'}
+            </button>
+            <Link
+              href="/"
+              className="mt-4 block text-center text-xs text-zinc-600 transition hover:text-zinc-400"
+            >
+              Volver al inicio
+            </Link>
+          </form>
+        </div>
       </div>
     )
   }
 
+  const tabs: { id: TabId; label: string }[] = [
+    { id: 'rules', label: 'Reglas' },
+    { id: 'qr', label: 'QR mesas' },
+    { id: 'security', label: 'Seguridad' },
+  ]
+
   return (
-    <div className="min-h-screen bg-zinc-950 text-white p-4 md:p-8">
-      <div className="max-w-4xl mx-auto">
-        <div className="flex items-start justify-between gap-4 mb-6">
-          <div>
-            <p className="text-emerald-400 text-xs tracking-[2px] uppercase">
+    <div className="min-h-screen bg-[#07080a] font-[family-name:var(--font-geist-sans)] text-zinc-100 antialiased">
+      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,_rgba(16,185,129,0.08),_transparent)]" />
+
+      {/* Top bar */}
+      <header className="sticky top-0 z-30 border-b border-zinc-800/80 bg-[#07080a]/90 backdrop-blur-md">
+        <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3 md:px-6">
+          <div className="min-w-0">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
               NATMusicQR
             </p>
-            <h1 className="text-3xl font-bold mt-1">Admin</h1>
-            <p className="text-zinc-400 text-sm mt-1">
-              Reglas del jukebox y QR por mesa
-            </p>
+            <h1 className="truncate text-lg font-semibold tracking-tight text-white md:text-xl">
+              Administración
+            </h1>
           </div>
-          <button
-            type="button"
-            onClick={logout}
-            className="text-sm text-zinc-500 hover:text-zinc-300"
-          >
-            Salir
-          </button>
-        </div>
-
-        <form onSubmit={handleSave} className="space-y-6 max-w-xl">
-          {/* PIN + horario */}
-          <section className="rounded-2xl border border-amber-900/40 bg-amber-950/20 p-5 space-y-4">
-            <h2 className="font-semibold text-lg">Acceso del local</h2>
-            <p className="text-xs text-zinc-400">
-              Evita que usen el jukebox desde casa: PIN visible solo en el local
-              + horario de atención.
-            </p>
-
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={config.access.pinEnabled}
-                onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    access: { ...c.access, pinEnabled: e.target.checked },
-                  }))
-                }
-              />
-              Exigir PIN del local
-            </label>
-            <label className="block">
-              <span className="text-sm text-zinc-400">PIN (ej. 4 dígitos)</span>
-              <input
-                type="text"
-                inputMode="numeric"
-                value={config.access.pin}
-                disabled={!config.access.pinEnabled}
-                onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    access: { ...c.access, pin: e.target.value },
-                  }))
-                }
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 tracking-widest disabled:opacity-40"
-                maxLength={32}
-                placeholder="1234"
-              />
-            </label>
-
-            <label className="flex items-center gap-2 text-sm pt-2">
-              <input
-                type="checkbox"
-                checked={config.access.hoursEnabled}
-                onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    access: { ...c.access, hoursEnabled: e.target.checked },
-                  }))
-                }
-              />
-              Limitar por horario de atención
-            </label>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm text-zinc-400">Abre</span>
-                <input
-                  type="time"
-                  disabled={!config.access.hoursEnabled}
-                  value={config.access.openTime}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      access: { ...c.access, openTime: e.target.value },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm text-zinc-400">Cierra</span>
-                <input
-                  type="time"
-                  disabled={!config.access.hoursEnabled}
-                  value={config.access.closeTime}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      access: { ...c.access, closeTime: e.target.value },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-            </div>
-            <label className="block">
-              <span className="text-sm text-zinc-400">Zona horaria</span>
-              <select
-                disabled={!config.access.hoursEnabled}
-                value={config.access.timezone}
-                onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    access: { ...c.access, timezone: e.target.value },
-                  }))
-                }
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-              >
-                <option value="America/Lima">America/Lima (Perú)</option>
-                <option value="America/Bogota">America/Bogota (Colombia)</option>
-                <option value="America/Mexico_City">America/Mexico_City</option>
-                <option value="America/Santiago">America/Santiago (Chile)</option>
-                <option value="America/Argentina/Buenos_Aires">
-                  America/Argentina/Buenos_Aires
-                </option>
-                <option value="America/New_York">America/New_York</option>
-                <option value="Europe/Madrid">Europe/Madrid</option>
-                <option value="UTC">UTC</option>
-              </select>
-            </label>
-            <p className="text-xs text-zinc-500">
-              Si cierra después de medianoche (ej. 18:00 → 02:00), el sistema lo
-              entiende bien.
-            </p>
-          </section>
-
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
-            <h2 className="font-semibold text-lg">Duración máxima del video</h2>
-            <label className="block">
-              <span className="text-sm text-zinc-400">Minutos</span>
-              <input
-                type="number"
-                min={1}
-                max={60}
-                value={Math.round(config.maxDurationSeconds / 60)}
-                onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    maxDurationSeconds:
-                      Math.max(1, Number(e.target.value) || 1) * 60,
-                  }))
-                }
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3"
-              />
-            </label>
-          </section>
-
-          <section className="rounded-2xl border border-emerald-900/50 bg-emerald-950/20 p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-lg">Por celular</h2>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  ID único por teléfono al abrir el join (vía QR)
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm shrink-0">
-                <input
-                  type="checkbox"
-                  checked={config.perDevice.enabled}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      perDevice: { ...c.perDevice, enabled: e.target.checked },
-                    }))
-                  }
-                />
-                Activo
-              </label>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm text-zinc-400">Máx. canciones</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={50}
-                  disabled={!config.perDevice.enabled}
-                  value={config.perDevice.maxSongs}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      perDevice: {
-                        ...c.perDevice,
-                        maxSongs: Number(e.target.value) || 1,
-                      },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm text-zinc-400">Cada (minutos)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={1440}
-                  disabled={!config.perDevice.enabled}
-                  value={config.perDevice.windowMinutes}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      perDevice: {
-                        ...c.perDevice,
-                        windowMinutes: Number(e.target.value) || 1,
-                      },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-lg">Por mesa</h2>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Límite compartido de la mesa
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm shrink-0">
-                <input
-                  type="checkbox"
-                  checked={config.perTable.enabled}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      perTable: { ...c.perTable, enabled: e.target.checked },
-                    }))
-                  }
-                />
-                Activo
-              </label>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm text-zinc-400">Máx. canciones</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={50}
-                  disabled={!config.perTable.enabled}
-                  value={config.perTable.maxSongs}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      perTable: {
-                        ...c.perTable,
-                        maxSongs: Number(e.target.value) || 1,
-                      },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm text-zinc-400">Cada (minutos)</span>
-                <input
-                  type="number"
-                  min={1}
-                  max={1440}
-                  disabled={!config.perTable.enabled}
-                  value={config.perTable.windowMinutes}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      perTable: {
-                        ...c.perTable,
-                        windowMinutes: Number(e.target.value) || 1,
-                      },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-emerald-900/40 bg-emerald-950/15 p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-lg">autoplayMusica</h2>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Si la cola está vacía, reproduce al azar canciones del catálogo
-                  del local (no de pedidos de mesa).
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm shrink-0">
-                <input
-                  type="checkbox"
-                  checked={config.autoplayMusic?.enabled ?? false}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      autoplayMusic: { enabled: e.target.checked },
-                    }))
-                  }
-                />
-                Activo
-              </label>
-            </div>
-          </section>
-
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
-            <div className="flex items-center justify-between gap-3">
-              <div>
-                <h2 className="font-semibold text-lg">Votos 👍 / 👎</h2>
-                <p className="text-xs text-zinc-400 mt-0.5">
-                  Cada celular vota la canción en reproducción. Si los 👎
-                  llegan al % indicado, se salta a la siguiente.
-                </p>
-              </div>
-              <label className="flex items-center gap-2 text-sm shrink-0">
-                <input
-                  type="checkbox"
-                  checked={config.voting?.enabled ?? false}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      voting: {
-                        ...(c.voting ?? emptyConfig.voting),
-                        enabled: e.target.checked,
-                      },
-                    }))
-                  }
-                />
-                Activo
-              </label>
-            </div>
-            <div className="grid grid-cols-2 gap-3">
-              <label className="block">
-                <span className="text-sm text-zinc-400">
-                  % no me gusta para saltar
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  disabled={!config.voting.enabled}
-                  value={config.voting?.skipThresholdPercent ?? 80}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      voting: {
-                        ...(c.voting ?? emptyConfig.voting),
-                        skipThresholdPercent: Number(e.target.value) || 80,
-                      },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-              <label className="block">
-                <span className="text-sm text-zinc-400">
-                  Mín. votos para saltar
-                </span>
-                <input
-                  type="number"
-                  min={1}
-                  max={100}
-                  disabled={!config.voting.enabled}
-                  value={config.voting?.minVotesToSkip ?? 2}
-                  onChange={(e) =>
-                    setConfig((c) => ({
-                      ...c,
-                      voting: {
-                        ...(c.voting ?? emptyConfig.voting),
-                        minVotesToSkip: Number(e.target.value) || 2,
-                      },
-                    }))
-                  }
-                  className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 disabled:opacity-40"
-                />
-              </label>
-            </div>
-            <p className="text-xs text-zinc-500">
-              Ej: 80% y mín. 2 → con 2 👎 de 2 votos (100%) salta; con 1 👎 no.
-            </p>
-          </section>
-
-          <section className="rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5 space-y-3">
-            <h2 className="font-semibold text-lg">Otras reglas</h2>
-            <label className="flex items-center gap-2 text-sm">
-              <input
-                type="checkbox"
-                checked={config.blockDuplicateInQueue}
-                onChange={(e) =>
-                  setConfig((c) => ({
-                    ...c,
-                    blockDuplicateInQueue: e.target.checked,
-                  }))
-                }
-              />
-              No permitir la misma canción si ya está en cola
-            </label>
-          </section>
-
-          {error && (
-            <div className="rounded-xl border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-300">
-              {error}
-            </div>
-          )}
-          {message && (
-            <div className="rounded-xl border border-emerald-800 bg-emerald-950/40 px-4 py-3 text-sm text-emerald-300">
-              {message}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={saving}
-            className="w-full rounded-xl bg-emerald-600 hover:bg-emerald-500 font-semibold py-3.5 disabled:opacity-50"
-          >
-            {saving ? 'Guardando…' : 'Guardar reglas'}
-          </button>
-        </form>
-
-        {/* —— Cambiar contraseña —— */}
-        <section className="mt-10 max-w-xl rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
-          <h2 className="font-semibold text-xl mb-1">Cambiar contraseña admin</h2>
-          <p className="text-sm text-zinc-400 mb-4">
-            Se guarda en Supabase. La de <code className="text-zinc-500">.env</code>{' '}
-            solo se usa si aún no has cambiado la clave aquí.
-          </p>
-          <form onSubmit={handleChangePassword} className="space-y-3">
-            <label className="block">
-              <span className="text-sm text-zinc-400">Contraseña actual</span>
-              <input
-                type="password"
-                value={currentPwd}
-                onChange={(e) => setCurrentPwd(e.target.value)}
-                placeholder="Deja vacío para usar la de esta sesión"
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 text-sm"
-                autoComplete="current-password"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm text-zinc-400">Nueva contraseña</span>
-              <input
-                type="password"
-                value={newPwd}
-                onChange={(e) => setNewPwd(e.target.value)}
-                minLength={6}
-                required
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 text-sm"
-                autoComplete="new-password"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm text-zinc-400">Confirmar nueva</span>
-              <input
-                type="password"
-                value={confirmPwd}
-                onChange={(e) => setConfirmPwd(e.target.value)}
-                minLength={6}
-                required
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 text-sm"
-                autoComplete="new-password"
-              />
-            </label>
-            {pwdError && (
-              <p className="text-sm text-red-400">{pwdError}</p>
-            )}
-            {pwdMessage && (
-              <p className="text-sm text-emerald-400">{pwdMessage}</p>
-            )}
-            <button
-              type="submit"
-              disabled={pwdSaving}
-              className="w-full rounded-xl border border-zinc-600 hover:border-emerald-600 font-medium py-3 disabled:opacity-50"
+          <div className="flex shrink-0 items-center gap-2">
+            <Link
+              href="/player/natmusicqr"
+              className="hidden rounded-lg border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200 sm:inline-block"
             >
-              {pwdSaving ? 'Guardando…' : 'Actualizar contraseña'}
-            </button>
-          </form>
-        </section>
-
-        {/* —— Generador QR —— */}
-        <section className="mt-10 rounded-2xl border border-zinc-800 bg-zinc-900/60 p-5">
-          <div className="flex flex-wrap items-start justify-between gap-3 mb-4">
-            <div>
-              <h2 className="font-semibold text-xl">QR por mesa</h2>
-              <p className="text-sm text-zinc-400 mt-1">
-                Cada QR abre el join con la mesa ya asignada. Al escanear se
-                crea el ID del celular automáticamente.
-              </p>
-            </div>
+              TV
+            </Link>
+            <Link
+              href="/join/natmusicqr"
+              className="hidden rounded-lg border border-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-400 transition hover:border-zinc-600 hover:text-zinc-200 sm:inline-block"
+            >
+              Join
+            </Link>
             <button
               type="button"
-              onClick={copyAllLinks}
-              className="text-sm rounded-full border border-zinc-700 px-4 py-2 hover:border-emerald-600"
+              onClick={() => void handleSave()}
+              disabled={saving}
+              className="rounded-lg bg-emerald-500 px-3.5 py-1.5 text-xs font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50"
             >
-              {copied === 'all' ? 'Copiado ✓' : 'Copiar todos los links'}
+              {saving ? 'Guardando…' : 'Guardar'}
+            </button>
+            <button
+              type="button"
+              onClick={logout}
+              className="rounded-lg px-2 py-1.5 text-xs text-zinc-500 transition hover:text-zinc-300"
+            >
+              Salir
             </button>
           </div>
+        </div>
 
-          <div className="grid sm:grid-cols-3 gap-3 mb-6">
-            <label className="block sm:col-span-2">
-              <span className="text-sm text-zinc-400">
-                URL base (local o producción)
-              </span>
-              <input
-                type="url"
-                value={baseUrl}
-                onChange={(e) => setBaseUrl(e.target.value)}
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 text-sm"
-                placeholder="http://192.168.1.142:3000 o https://tu-app.vercel.app"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm text-zinc-400">Slug del local</span>
-              <input
-                type="text"
-                value={venueSlug}
-                onChange={(e) => setVenueSlug(e.target.value)}
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm text-zinc-400">Desde mesa #</span>
-              <input
-                type="number"
-                min={1}
-                value={tableStart}
-                onChange={(e) => setTableStart(Number(e.target.value) || 1)}
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 text-sm"
-              />
-            </label>
-            <label className="block">
-              <span className="text-sm text-zinc-400">Cantidad de mesas</span>
-              <input
-                type="number"
-                min={1}
-                max={50}
-                value={tableCount}
-                onChange={(e) => setTableCount(Number(e.target.value) || 1)}
-                className="mt-1 w-full rounded-xl bg-zinc-950 border border-zinc-700 px-4 py-3 text-sm"
-              />
-            </label>
+        {/* Tabs */}
+        <div className="mx-auto flex max-w-5xl gap-1 px-4 pb-2 md:px-6">
+          {tabs.map((t) => (
+            <button
+              key={t.id}
+              type="button"
+              onClick={() => setTab(t.id)}
+              className={`rounded-lg px-3.5 py-1.5 text-xs font-medium transition ${
+                tab === t.id
+                  ? 'bg-zinc-800 text-white'
+                  : 'text-zinc-500 hover:bg-zinc-900 hover:text-zinc-300'
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+      </header>
+
+      <main className="relative mx-auto max-w-5xl px-4 py-5 pb-24 md:px-6">
+        {(error || message) && (
+          <div
+            className={`mb-4 rounded-lg border px-3.5 py-2.5 text-sm ${
+              error
+                ? 'border-red-900/60 bg-red-950/40 text-red-300'
+                : 'border-emerald-900/50 bg-emerald-950/30 text-emerald-300'
+            }`}
+          >
+            {error || message}
           </div>
+        )}
 
-          <p className="text-xs text-zinc-500 mb-4">
-            En el celular usa la IP de tu PC (ej.{' '}
-            <code className="text-zinc-400">http://192.168.x.x:3000</code>), no{' '}
-            <code className="text-zinc-400">localhost</code>.
-          </p>
+        {/* ——— REGLAS ——— */}
+        {tab === 'rules' && (
+          <form onSubmit={handleSave} className="space-y-3">
+            {/* Status chips */}
+            <div className="flex flex-wrap gap-2">
+              <StatusChip
+                on={config.autoplayMusic?.enabled}
+                label="Autoplay"
+              />
+              <StatusChip on={config.voting?.enabled} label="Votos" />
+              <StatusChip on={config.access.pinEnabled} label="PIN" />
+              <StatusChip on={config.access.hoursEnabled} label="Horario" />
+            </div>
 
-          <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-4">
-            {tableLinks.map((t) => (
-              <div
-                key={t.mesa}
-                className="rounded-2xl border border-zinc-800 bg-zinc-950 p-3 flex flex-col items-center text-center"
-              >
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img
-                  src={qrImageUrl(t.url, 160)}
-                  alt={`QR ${t.label}`}
-                  width={140}
-                  height={140}
-                  className="rounded-lg bg-white p-1"
+            <div className="grid gap-3 lg:grid-cols-2">
+              {/* Acceso */}
+              <section className={cardClass}>
+                <SectionHead
+                  title="Acceso del local"
+                  desc="PIN y horario para limitar uso fuera del bar"
                 />
-                <p className="font-semibold mt-2">{t.label}</p>
-                <p className="text-[10px] text-zinc-500 break-all mt-1 leading-snug">
-                  {t.url}
-                </p>
+                <div className="mt-3 space-y-3">
+                  <RowToggle
+                    title="Exigir PIN"
+                    checked={config.access.pinEnabled}
+                    onChange={(v) =>
+                      setConfig((c) => ({
+                        ...c,
+                        access: { ...c.access, pinEnabled: v },
+                      }))
+                    }
+                  />
+                  <Field label="Código PIN">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      value={config.access.pin}
+                      disabled={!config.access.pinEnabled}
+                      onChange={(e) =>
+                        setConfig((c) => ({
+                          ...c,
+                          access: { ...c.access, pin: e.target.value },
+                        }))
+                      }
+                      className={`${inputClass} tracking-[0.2em]`}
+                      maxLength={32}
+                      placeholder="1234"
+                    />
+                  </Field>
+                  <div className="border-t border-zinc-800/80 pt-3">
+                    <RowToggle
+                      title="Horario de atención"
+                      checked={config.access.hoursEnabled}
+                      onChange={(v) =>
+                        setConfig((c) => ({
+                          ...c,
+                          access: { ...c.access, hoursEnabled: v },
+                        }))
+                      }
+                    />
+                  </div>
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <Field label="Abre">
+                      <input
+                        type="time"
+                        disabled={!config.access.hoursEnabled}
+                        value={config.access.openTime}
+                        onChange={(e) =>
+                          setConfig((c) => ({
+                            ...c,
+                            access: { ...c.access, openTime: e.target.value },
+                          }))
+                        }
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field label="Cierra">
+                      <input
+                        type="time"
+                        disabled={!config.access.hoursEnabled}
+                        value={config.access.closeTime}
+                        onChange={(e) =>
+                          setConfig((c) => ({
+                            ...c,
+                            access: { ...c.access, closeTime: e.target.value },
+                          }))
+                        }
+                        className={inputClass}
+                      />
+                    </Field>
+                  </div>
+                  <Field label="Zona horaria">
+                    <select
+                      disabled={!config.access.hoursEnabled}
+                      value={config.access.timezone}
+                      onChange={(e) =>
+                        setConfig((c) => ({
+                          ...c,
+                          access: { ...c.access, timezone: e.target.value },
+                        }))
+                      }
+                      className={inputClass}
+                    >
+                      <option value="America/Lima">Lima (Perú)</option>
+                      <option value="America/Bogota">Bogotá</option>
+                      <option value="America/Mexico_City">Ciudad de México</option>
+                      <option value="America/Santiago">Santiago</option>
+                      <option value="America/Argentina/Buenos_Aires">
+                        Buenos Aires
+                      </option>
+                      <option value="America/New_York">New York</option>
+                      <option value="Europe/Madrid">Madrid</option>
+                      <option value="UTC">UTC</option>
+                    </select>
+                  </Field>
+                </div>
+              </section>
+
+              {/* Reproducción */}
+              <section className={cardClass}>
+                <SectionHead
+                  title="Reproducción"
+                  desc="Duración, autoplay y catálogo"
+                />
+                <div className="mt-3 space-y-3">
+                  <Field label="Duración máxima (min)">
+                    <input
+                      type="number"
+                      min={1}
+                      max={60}
+                      value={Math.round(config.maxDurationSeconds / 60)}
+                      onChange={(e) =>
+                        setConfig((c) => ({
+                          ...c,
+                          maxDurationSeconds:
+                            Math.max(1, Number(e.target.value) || 1) * 60,
+                        }))
+                      }
+                      className={inputClass}
+                    />
+                  </Field>
+                  <div className="rounded-lg border border-emerald-500/15 bg-emerald-500/5 p-3">
+                    <RowToggle
+                      title="autoplayMusica"
+                      subtitle="Cola vacía → canciones del catálogo al azar"
+                      checked={config.autoplayMusic?.enabled ?? false}
+                      onChange={(v) =>
+                        setConfig((c) => ({
+                          ...c,
+                          autoplayMusic: { enabled: v },
+                        }))
+                      }
+                    />
+                  </div>
+                  <RowToggle
+                    title="Bloquear duplicados en cola"
+                    checked={config.blockDuplicateInQueue}
+                    onChange={(v) =>
+                      setConfig((c) => ({
+                        ...c,
+                        blockDuplicateInQueue: v,
+                      }))
+                    }
+                  />
+                </div>
+              </section>
+
+              {/* Límites */}
+              <section className={cardClass}>
+                <SectionHead
+                  title="Límites de pedidos"
+                  desc="Cuotas por celular y por mesa"
+                />
+                <div className="mt-3 space-y-4">
+                  <div>
+                    <RowToggle
+                      title="Por celular"
+                      subtitle="UUID del dispositivo"
+                      checked={config.perDevice.enabled}
+                      onChange={(v) =>
+                        setConfig((c) => ({
+                          ...c,
+                          perDevice: { ...c.perDevice, enabled: v },
+                        }))
+                      }
+                    />
+                    <div className="mt-2 grid grid-cols-2 gap-2.5">
+                      <Field label="Máx. canciones">
+                        <input
+                          type="number"
+                          min={1}
+                          max={50}
+                          disabled={!config.perDevice.enabled}
+                          value={config.perDevice.maxSongs}
+                          onChange={(e) =>
+                            setConfig((c) => ({
+                              ...c,
+                              perDevice: {
+                                ...c.perDevice,
+                                maxSongs: Number(e.target.value) || 1,
+                              },
+                            }))
+                          }
+                          className={inputClass}
+                        />
+                      </Field>
+                      <Field label="Cada (min)">
+                        <input
+                          type="number"
+                          min={1}
+                          max={1440}
+                          disabled={!config.perDevice.enabled}
+                          value={config.perDevice.windowMinutes}
+                          onChange={(e) =>
+                            setConfig((c) => ({
+                              ...c,
+                              perDevice: {
+                                ...c.perDevice,
+                                windowMinutes: Number(e.target.value) || 1,
+                              },
+                            }))
+                          }
+                          className={inputClass}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                  <div className="border-t border-zinc-800/80 pt-3">
+                    <RowToggle
+                      title="Por mesa"
+                      subtitle="Compartido entre celulares de la mesa"
+                      checked={config.perTable.enabled}
+                      onChange={(v) =>
+                        setConfig((c) => ({
+                          ...c,
+                          perTable: { ...c.perTable, enabled: v },
+                        }))
+                      }
+                    />
+                    <div className="mt-2 grid grid-cols-2 gap-2.5">
+                      <Field label="Máx. canciones">
+                        <input
+                          type="number"
+                          min={1}
+                          max={50}
+                          disabled={!config.perTable.enabled}
+                          value={config.perTable.maxSongs}
+                          onChange={(e) =>
+                            setConfig((c) => ({
+                              ...c,
+                              perTable: {
+                                ...c.perTable,
+                                maxSongs: Number(e.target.value) || 1,
+                              },
+                            }))
+                          }
+                          className={inputClass}
+                        />
+                      </Field>
+                      <Field label="Cada (min)">
+                        <input
+                          type="number"
+                          min={1}
+                          max={1440}
+                          disabled={!config.perTable.enabled}
+                          value={config.perTable.windowMinutes}
+                          onChange={(e) =>
+                            setConfig((c) => ({
+                              ...c,
+                              perTable: {
+                                ...c.perTable,
+                                windowMinutes: Number(e.target.value) || 1,
+                              },
+                            }))
+                          }
+                          className={inputClass}
+                        />
+                      </Field>
+                    </div>
+                  </div>
+                </div>
+              </section>
+
+              {/* Votos */}
+              <section className={cardClass}>
+                <SectionHead
+                  title="Votos en vivo"
+                  desc="👍 / 👎 desde cada celular · salta si hay rechazo"
+                />
+                <div className="mt-3 space-y-3">
+                  <RowToggle
+                    title="Habilitar votación"
+                    checked={config.voting?.enabled ?? false}
+                    onChange={(v) =>
+                      setConfig((c) => ({
+                        ...c,
+                        voting: {
+                          ...(c.voting ?? emptyConfig.voting),
+                          enabled: v,
+                        },
+                      }))
+                    }
+                  />
+                  <div className="grid grid-cols-2 gap-2.5">
+                    <Field
+                      label="% 👎 para saltar"
+                      hint="Ej. 80"
+                    >
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        disabled={!config.voting?.enabled}
+                        value={config.voting?.skipThresholdPercent ?? 80}
+                        onChange={(e) =>
+                          setConfig((c) => ({
+                            ...c,
+                            voting: {
+                              ...(c.voting ?? emptyConfig.voting),
+                              skipThresholdPercent:
+                                Number(e.target.value) || 80,
+                            },
+                          }))
+                        }
+                        className={inputClass}
+                      />
+                    </Field>
+                    <Field
+                      label="Mín. votos"
+                      hint="Evita saltos con 1 voto"
+                    >
+                      <input
+                        type="number"
+                        min={1}
+                        max={100}
+                        disabled={!config.voting?.enabled}
+                        value={config.voting?.minVotesToSkip ?? 2}
+                        onChange={(e) =>
+                          setConfig((c) => ({
+                            ...c,
+                            voting: {
+                              ...(c.voting ?? emptyConfig.voting),
+                              minVotesToSkip: Number(e.target.value) || 2,
+                            },
+                          }))
+                        }
+                        className={inputClass}
+                      />
+                    </Field>
+                  </div>
+                </div>
+              </section>
+            </div>
+
+            <button
+              type="submit"
+              disabled={saving}
+              className="mt-1 w-full rounded-lg bg-emerald-500 py-2.5 text-sm font-semibold text-zinc-950 transition hover:bg-emerald-400 disabled:opacity-50 lg:hidden"
+            >
+              {saving ? 'Guardando…' : 'Guardar reglas'}
+            </button>
+          </form>
+        )}
+
+        {/* ——— QR ——— */}
+        {tab === 'qr' && (
+          <section className="space-y-3">
+            <div className={`${cardClass} space-y-3`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <SectionHead
+                  title="Códigos QR por mesa"
+                  desc="Cada QR abre el join con mesa preasignada"
+                />
                 <button
                   type="button"
-                  onClick={() => copyText(t.url, String(t.mesa))}
-                  className="mt-2 text-xs text-emerald-400 hover:text-emerald-300"
+                  onClick={copyAllLinks}
+                  className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-emerald-500/40 hover:text-emerald-300"
                 >
-                  {copied === String(t.mesa) ? 'Copiado ✓' : 'Copiar link'}
+                  {copied === 'all' ? 'Copiado' : 'Copiar todos'}
                 </button>
               </div>
-            ))}
-          </div>
-        </section>
+              <div className="grid gap-2.5 sm:grid-cols-2 lg:grid-cols-4">
+                <Field label="URL base" className="sm:col-span-2 lg:col-span-2">
+                  <input
+                    type="url"
+                    value={baseUrl}
+                    onChange={(e) => setBaseUrl(e.target.value)}
+                    className={inputClass}
+                    placeholder="https://nat-music-qr.vercel.app"
+                  />
+                </Field>
+                <Field label="Slug">
+                  <input
+                    type="text"
+                    value={venueSlug}
+                    onChange={(e) => setVenueSlug(e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+                <div className="grid grid-cols-2 gap-2.5 sm:col-span-2 lg:col-span-1 lg:grid-cols-2">
+                  <Field label="Desde #">
+                    <input
+                      type="number"
+                      min={1}
+                      value={tableStart}
+                      onChange={(e) =>
+                        setTableStart(Number(e.target.value) || 1)
+                      }
+                      className={inputClass}
+                    />
+                  </Field>
+                  <Field label="Cantidad">
+                    <input
+                      type="number"
+                      min={1}
+                      max={50}
+                      value={tableCount}
+                      onChange={(e) =>
+                        setTableCount(Number(e.target.value) || 1)
+                      }
+                      className={inputClass}
+                    />
+                  </Field>
+                </div>
+              </div>
+              <p className="text-[11px] text-zinc-600">
+                En producción usa tu dominio Vercel. En red local, la IP del PC
+                (no localhost).
+              </p>
+            </div>
 
-        <div className="mt-8 flex flex-wrap gap-4 text-sm text-zinc-500">
-          <Link href="/join/natmusicqr" className="hover:text-zinc-300">
-            → Join cliente
-          </Link>
-          <Link href="/player/natmusicqr" className="hover:text-zinc-300">
-            → Player TV
-          </Link>
-          <Link href="/" className="hover:text-zinc-300">
-            → Inicio
-          </Link>
-        </div>
-      </div>
+            <div className="grid grid-cols-2 gap-2.5 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+              {tableLinks.map((t) => (
+                <div
+                  key={t.mesa}
+                  className="flex flex-col items-center rounded-xl border border-zinc-800/80 bg-zinc-900/30 p-2.5 text-center"
+                >
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img
+                    src={qrImageUrl(t.url, 132)}
+                    alt={`QR ${t.label}`}
+                    width={112}
+                    height={112}
+                    className="rounded-md bg-white p-1"
+                  />
+                  <p className="mt-2 text-xs font-semibold text-zinc-200">
+                    {t.label}
+                  </p>
+                  <button
+                    type="button"
+                    onClick={() => copyText(t.url, String(t.mesa))}
+                    className="mt-1 text-[10px] font-medium text-emerald-400/90 hover:text-emerald-300"
+                  >
+                    {copied === String(t.mesa) ? 'Copiado' : 'Copiar link'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+
+        {/* ——— SEGURIDAD ——— */}
+        {tab === 'security' && (
+          <section className={`${cardClass} max-w-lg`}>
+            <SectionHead
+              title="Contraseña de admin"
+              desc="Se guarda en Supabase. Tiene prioridad sobre .env"
+            />
+            <form onSubmit={handleChangePassword} className="mt-4 space-y-2.5">
+              <Field label="Actual">
+                <input
+                  type="password"
+                  value={currentPwd}
+                  onChange={(e) => setCurrentPwd(e.target.value)}
+                  placeholder="Vacío = sesión actual"
+                  className={inputClass}
+                  autoComplete="current-password"
+                />
+              </Field>
+              <Field label="Nueva (mín. 6)">
+                <input
+                  type="password"
+                  value={newPwd}
+                  onChange={(e) => setNewPwd(e.target.value)}
+                  minLength={6}
+                  required
+                  className={inputClass}
+                  autoComplete="new-password"
+                />
+              </Field>
+              <Field label="Confirmar">
+                <input
+                  type="password"
+                  value={confirmPwd}
+                  onChange={(e) => setConfirmPwd(e.target.value)}
+                  minLength={6}
+                  required
+                  className={inputClass}
+                  autoComplete="new-password"
+                />
+              </Field>
+              {pwdError && (
+                <p className="text-sm text-red-400">{pwdError}</p>
+              )}
+              {pwdMessage && (
+                <p className="text-sm text-emerald-400">{pwdMessage}</p>
+              )}
+              <button
+                type="submit"
+                disabled={pwdSaving}
+                className="mt-1 w-full rounded-lg border border-zinc-700 py-2.5 text-sm font-medium text-zinc-200 transition hover:border-emerald-500/40 hover:text-white disabled:opacity-50"
+              >
+                {pwdSaving ? 'Actualizando…' : 'Cambiar contraseña'}
+              </button>
+            </form>
+          </section>
+        )}
+
+        <p className="mt-8 text-center text-[11px] text-zinc-700">
+          NATMusicQR · Panel de control
+        </p>
+      </main>
     </div>
+  )
+}
+
+function SectionHead({ title, desc }: { title: string; desc: string }) {
+  return (
+    <div>
+      <h2 className="text-sm font-semibold tracking-tight text-zinc-100">
+        {title}
+      </h2>
+      <p className="mt-0.5 text-[12px] leading-snug text-zinc-500">{desc}</p>
+    </div>
+  )
+}
+
+function RowToggle({
+  title,
+  subtitle,
+  checked,
+  onChange,
+}: {
+  title: string
+  subtitle?: string
+  checked: boolean
+  onChange: (v: boolean) => void
+}) {
+  return (
+    <div className="flex items-center justify-between gap-3">
+      <div className="min-w-0">
+        <p className="text-sm font-medium text-zinc-200">{title}</p>
+        {subtitle ? (
+          <p className="text-[11px] leading-snug text-zinc-500">{subtitle}</p>
+        ) : null}
+      </div>
+      <Toggle checked={checked} onChange={onChange} label={title} />
+    </div>
+  )
+}
+
+function StatusChip({ on, label }: { on?: boolean; label: string }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium ${
+        on
+          ? 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300'
+          : 'border-zinc-800 bg-zinc-900/50 text-zinc-500'
+      }`}
+    >
+      <span
+        className={`h-1.5 w-1.5 rounded-full ${
+          on ? 'bg-emerald-400' : 'bg-zinc-600'
+        }`}
+      />
+      {label}
+    </span>
   )
 }
