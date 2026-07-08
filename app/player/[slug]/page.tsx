@@ -33,6 +33,7 @@ export default function PlayerPage() {
     down: number
     downPercent: number
   } | null>(null)
+  const [autoplayOn, setAutoplayOn] = useState(false)
 
   const advancingRef = useRef(false)
   const venueIdRef = useRef<string | null>(null)
@@ -61,16 +62,19 @@ export default function PlayerPage() {
 
   const loadFlags = useCallback(async () => {
     try {
-      const res = await fetch('/api/config')
+      const res = await fetch('/api/config', { cache: 'no-store' })
       const data = await res.json()
+      const on = Boolean(data.autoplayMusic?.enabled)
       flagsRef.current = {
-        autoplayEnabled: Boolean(data.autoplayMusic?.enabled),
+        autoplayEnabled: on,
         votingEnabled: Boolean(data.voting?.enabled),
         skipThresholdPercent: Number(data.voting?.skipThresholdPercent ?? 80),
         minVotesToSkip: Number(data.voting?.minVotesToSkip ?? 2),
       }
+      setAutoplayOn(on)
+      return on
     } catch {
-      /* defaults */
+      return flagsRef.current.autoplayEnabled
     }
   }, [])
 
@@ -353,6 +357,9 @@ export default function PlayerPage() {
             {liveNote && (
               <div className="text-xs text-emerald-500/80">{liveNote}</div>
             )}
+            <div className="text-xs text-zinc-500">
+              Autoplay: {autoplayOn ? 'ON' : 'OFF'}
+            </div>
             {lastSync && (
               <div className="text-xs text-zinc-600">Sync {lastSync}</div>
             )}
@@ -386,9 +393,13 @@ export default function PlayerPage() {
               <p className="text-sm text-zinc-600 mt-2">
                 Escanea el QR y pide desde /join/{venue?.slug}
               </p>
-              {flagsRef.current.autoplayEnabled && (
-                <p className="text-xs text-emerald-600 mt-2">
-                  Autoplay música activo — cargará del catálogo
+              {autoplayOn ? (
+                <p className="text-xs text-emerald-500 mt-3">
+                  Autoplay ON — buscando canción del catálogo…
+                </p>
+              ) : (
+                <p className="text-xs text-zinc-600 mt-3">
+                  Autoplay OFF — actívalo en /admin y pulsa Guardar reglas
                 </p>
               )}
             </div>

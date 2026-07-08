@@ -132,11 +132,24 @@ export default function AdminPage() {
     setSaving(true)
     setError(null)
     setMessage(null)
+    // Asegurar que autoplay/voting siempre viajen al guardar
+    const payload: RuntimeJukeboxConfig = {
+      ...emptyConfig,
+      ...config,
+      access: { ...emptyConfig.access, ...config.access },
+      autoplayMusic: {
+        enabled: config.autoplayMusic?.enabled ?? false,
+      },
+      voting: {
+        ...emptyConfig.voting,
+        ...config.voting,
+      },
+    }
     try {
       const res = await fetch('/api/admin/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, config }),
+        body: JSON.stringify({ password, config: payload }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -147,8 +160,21 @@ export default function AdminPage() {
         )
         return
       }
-      setConfig({ ...emptyConfig, ...data.config })
-      setMessage('Reglas guardadas. Ya aplican a los nuevos pedidos.')
+      setConfig({
+        ...emptyConfig,
+        ...data.config,
+        access: { ...emptyConfig.access, ...data.config?.access },
+        autoplayMusic: {
+          ...emptyConfig.autoplayMusic,
+          ...data.config?.autoplayMusic,
+        },
+        voting: { ...emptyConfig.voting, ...data.config?.voting },
+      })
+      setMessage(
+        `Reglas guardadas. Autoplay: ${
+          data.config?.autoplayMusic?.enabled ? 'ON' : 'OFF'
+        }. Recarga la TV.`
+      )
     } catch {
       setError('Error de red al guardar')
     } finally {
