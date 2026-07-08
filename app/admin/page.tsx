@@ -6,6 +6,9 @@ import type { RuntimeJukeboxConfig } from '@/config/jukebox.config'
 
 const STORAGE_KEY = 'natmusicqr:admin-password'
 
+/** Sube este número en cada release para verificar el deploy en Vercel */
+export const ADMIN_UI_VERSION = '2.0.0'
+
 const emptyConfig: RuntimeJukeboxConfig = {
   maxDurationSeconds: 300,
   perTable: { enabled: true, maxSongs: 1, windowMinutes: 20 },
@@ -307,9 +310,14 @@ export default function AdminPage() {
             className="w-full max-w-[380px] rounded-2xl border border-zinc-800/90 bg-zinc-900/50 p-7 shadow-2xl backdrop-blur-xl"
           >
             <div className="mb-6">
-              <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-400/90">
-                NATMusicQR
-              </p>
+              <div className="flex items-center gap-2">
+                <p className="text-[11px] font-semibold uppercase tracking-[0.2em] text-emerald-400/90">
+                  NATMusicQR
+                </p>
+                <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-emerald-300 ring-1 ring-emerald-500/30">
+                  v{ADMIN_UI_VERSION}
+                </span>
+              </div>
               <h1 className="mt-2 text-2xl font-semibold tracking-tight text-white">
                 Panel de control
               </h1>
@@ -363,9 +371,14 @@ export default function AdminPage() {
       <header className="sticky top-0 z-30 border-b border-zinc-800/80 bg-[#07080a]/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3 md:px-6">
           <div className="min-w-0">
-            <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
-              NATMusicQR
-            </p>
+            <div className="flex items-center gap-2">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
+                NATMusicQR
+              </p>
+              <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-emerald-300 ring-1 ring-emerald-500/30">
+                v{ADMIN_UI_VERSION}
+              </span>
+            </div>
             <h1 className="truncate text-lg font-semibold tracking-tight text-white md:text-xl">
               Administración
             </h1>
@@ -951,8 +964,8 @@ export default function AdminPage() {
           </section>
         )}
 
-        <p className="mt-8 text-center text-[11px] text-zinc-700">
-          NATMusicQR · Panel de control
+        <p className="mt-8 text-center text-[11px] text-zinc-600">
+          NATMusicQR · Admin UI v{ADMIN_UI_VERSION}
         </p>
       </main>
     </div>
