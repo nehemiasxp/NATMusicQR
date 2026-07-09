@@ -40,6 +40,80 @@ export async function fetchActiveQueue(venueId: string) {
   }
 }
 
+export type ActiveMesa = {
+  /** Nombre de mesa (ej. "Mesa 4") */
+  name: string
+  /** Pedidos recientes de esa mesa */
+  requests: number
+  /** Tiene algo en cola o sonando ahora */
+  inQueue: boolean
+  lastActivity: string
+}
+
+/**
+ * Mesas con actividad reciente (pedidos en las últimas horas).
+ * Excluye Autoplay del sistema.
+ */
+export async function fetchActiveMesas(
+  venueId: string,
+  hoursBack = 4
+): Promise<{ mesas: ActiveMesa[]; error: QueueError | null }> {
+  const since = new Date(Date.now() - hoursBack * 60 * 60 * 1000).toISOString()
+
+  const { data, error } = await supabase
+    .from('queue_items')
+    .select('added_by_table, status, added_at')
+    .eq('venue_id', venueId)
+    .gte('added_at', since)
+    .not('added_by_table', 'is', null)
+    .order('added_at', { ascending: false })
+    .limit(300)
+
+  if (error) {
+    return { mesas: [], error: toError(error, 'No se pudieron cargar mesas') }
+  }
+
+  const map = new Map<
+    string,
+    { name: string; requests: number; inQueue: boolean; lastActivity: string }
+  >()
+
+  for (const row of data ?? []) {
+    const raw = (row.added_by_table as string)?.trim()
+    if (!raw) continue
+    if (raw.toLowerCase().includes('autoplay')) continue
+
+    // "Mesa 4 · Carlos" → "Mesa 4"
+    const name = raw.split('·')[0].trim() || raw
+    const key = name.toLowerCase()
+    const existing = map.get(key)
+    const activeNow =
+      row.status === 'queued' || row.status === 'playing'
+
+    if (!existing) {
+      map.set(key, {
+        name,
+        requests: 1,
+        inQueue: activeNow,
+        lastActivity: row.added_at,
+      })
+    } else {
+      existing.requests += 1
+      if (activeNow) existing.inQueue = true
+      if (row.added_at > existing.lastActivity) {
+        existing.lastActivity = row.added_at
+      }
+    }
+  }
+
+  const mesas = Array.from(map.values()).sort((a, b) => {
+    if (a.inQueue !== b.inQueue) return a.inQueue ? -1 : 1
+    return a.name.localeCompare(b.name, 'es', { numeric: true })
+  })
+
+  return { mesas, error: null }
+}
+
 /** Elige un video activo al azar del catálogo del local. */
 export async function pickRandomCatalogVideo(venueId: string) {
   const { data, error } = await supabase

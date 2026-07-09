@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useParams, useSearchParams } from 'next/navigation'
 import { supabase } from '@/lib/supabase'
-import { fetchActiveQueue } from '@/lib/queue'
+import { fetchActiveMesas, fetchActiveQueue, type ActiveMesa } from '@/lib/queue'
 import {
   clearMesaSession,
   formatTableLabel,
@@ -45,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.5'
+export const JOIN_UI_VERSION = '2.1.6'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -96,6 +96,8 @@ export default function JoinPage() {
   const [voteDown, setVoteDown] = useState(0)
   const [myVote, setMyVote] = useState<'up' | 'down' | null>(null)
   const [voteBusy, setVoteBusy] = useState(false)
+  const [showMesas, setShowMesas] = useState(false)
+  const [activeMesas, setActiveMesas] = useState<ActiveMesa[]>([])
 
   // Cargar sesión de mesa + deviceId + reglas
   useEffect(() => {
@@ -122,6 +124,11 @@ export default function JoinPage() {
       return
     }
     setQueue(items)
+  }, [])
+
+  const loadActiveMesas = useCallback(async (venueId: string) => {
+    const { mesas } = await fetchActiveMesas(venueId, 4)
+    setActiveMesas(mesas)
   }, [])
 
   const loadCatalog = useCallback(async (venueId: string) => {
@@ -178,13 +185,18 @@ export default function JoinPage() {
 
       const v = venueData as Venue
       setVenue(v)
-      await Promise.all([loadCatalog(v.id), loadQueue(v.id)])
+      await Promise.all([
+        loadCatalog(v.id),
+        loadQueue(v.id),
+        loadActiveMesas(v.id),
+      ])
       if (cancelled) return
       setLoading(false)
 
       // Polling: la cola se actualiza aunque Realtime no esté activo
       pollTimer = setInterval(() => {
         void loadQueue(v.id)
+        void loadActiveMesas(v.id)
       }, 3000)
 
       if (cancelled) {
@@ -218,7 +230,7 @@ export default function JoinPage() {
         void supabase.removeChannel(channel)
       }
     }
-  }, [slug, loadCatalog, loadQueue])
+  }, [slug, loadCatalog, loadQueue, loadActiveMesas])
 
   const queuedYoutubeIds = useMemo(() => {
     return new Set(
@@ -641,20 +653,102 @@ export default function JoinPage() {
               {venue?.name}
             </h1>
           </div>
-          <div className="shrink-0 text-right">
-            <div className="rounded-full border border-emerald-800/60 bg-emerald-950/50 px-3 py-1.5 text-sm">
-              <span className="text-emerald-400">🪑 </span>
-              {formatTableLabel(session)}
-            </div>
+          <div className="relative shrink-0 text-right">
+            <button
+              type="button"
+              onClick={() => {
+                setShowMesas((v) => !v)
+                if (venue) void loadActiveMesas(venue.id)
+              }}
+              className="inline-flex items-center gap-1.5 rounded-full border border-emerald-800/60 bg-emerald-950/50 px-3 py-1.5 text-sm font-medium transition hover:border-emerald-500/50 hover:bg-emerald-950"
+              aria-expanded={showMesas}
+              title="Ver mesas activas"
+            >
+              <span className="text-emerald-400">🪑</span>
+              <span className="max-w-[9rem] truncate">
+                {formatTableLabel(session)}
+              </span>
+              <span className="text-[10px] text-emerald-500/80">
+                {showMesas ? '▲' : '▼'}
+              </span>
+            </button>
             <button
               type="button"
               onClick={handleChangeMesa}
-              className="mt-1 text-xs text-zinc-500 hover:text-zinc-300"
+              className="mt-1 block w-full text-xs text-zinc-500 hover:text-zinc-300"
             >
               Cambiar mesa
             </button>
+
+            {showMesas && (
+              <div className="absolute right-0 z-40 mt-2 w-64 overflow-hidden rounded-xl border border-zinc-700/90 bg-zinc-900 shadow-2xl shadow-black/50">
+                <div className="border-b border-zinc-800 px-3 py-2">
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-zinc-400">
+                    Mesas activas
+                  </p>
+                  <p className="text-[10px] text-zinc-600">
+                    Con pedidos en las últimas horas
+                  </p>
+                </div>
+                <div className="max-h-60 overflow-y-auto py-1">
+                  {activeMesas.length === 0 ? (
+                    <p className="px-3 py-4 text-center text-xs text-zinc-500">
+                      Ninguna mesa activa aún
+                    </p>
+                  ) : (
+                    activeMesas.map((m) => {
+                      const isMine =
+                        m.name.toLowerCase() ===
+                        session.tableName.trim().toLowerCase()
+                      return (
+                        <div
+                          key={m.name}
+                          className={`flex items-center justify-between gap-2 px-3 py-2.5 text-left text-sm ${
+                            isMine
+                              ? 'bg-emerald-500/10 text-emerald-200'
+                              : 'text-zinc-200'
+                          }`}
+                        >
+                          <div className="min-w-0">
+                            <p className="truncate font-medium">
+                              {m.name}
+                              {isMine ? ' · tú' : ''}
+                            </p>
+                            <p className="text-[10px] text-zinc-500">
+                              {m.requests} pedido{m.requests === 1 ? '' : 's'}
+                              {m.inQueue ? ' · en cola ahora' : ''}
+                            </p>
+                          </div>
+                          <span
+                            className={`h-2 w-2 shrink-0 rounded-full ${
+                              m.inQueue ? 'bg-emerald-400' : 'bg-zinc-600'
+                            }`}
+                          />
+                        </div>
+                      )
+                    })
+                  )}
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setShowMesas(false)}
+                  className="w-full border-t border-zinc-800 py-2 text-xs text-zinc-500 hover:bg-zinc-800/50 hover:text-zinc-300"
+                >
+                  Cerrar
+                </button>
+              </div>
+            )}
           </div>
         </header>
+
+        {showMesas && (
+          <button
+            type="button"
+            className="fixed inset-0 z-30 cursor-default bg-black/40"
+            aria-label="Cerrar lista de mesas"
+            onClick={() => setShowMesas(false)}
+          />
+        )}
 
         {/* Ahora suena (siempre visible) */}
         <section className="mb-4 overflow-hidden rounded-2xl border border-zinc-800/90 bg-gradient-to-br from-emerald-950/70 to-zinc-900/80">
@@ -757,21 +851,20 @@ export default function JoinPage() {
           )}
         </section>
 
-        {/* 3 pestañas */}
-        <div className="mb-4 grid grid-cols-3 gap-1 rounded-xl border border-zinc-800/90 bg-zinc-900/60 p-1">
+        {/* 3 pestañas — tipografía alta y legible */}
+        <div className="mb-4 grid grid-cols-3 gap-1.5 rounded-2xl border border-zinc-800/90 bg-zinc-900/70 p-1.5">
           {tabs.map((t) => (
             <button
               key={t.id}
               type="button"
               onClick={() => setTab(t.id)}
-              className={`rounded-lg px-1.5 py-2.5 text-center text-[11px] font-semibold leading-tight transition sm:text-xs ${
+              className={`min-h-[3.25rem] rounded-xl px-1.5 py-2.5 text-center font-[family-name:var(--font-geist-sans)] text-[13px] font-bold leading-[1.15] tracking-tight transition sm:min-h-[3.5rem] sm:text-[15px] sm:leading-snug ${
                 tab === t.id
-                  ? 'bg-emerald-500 text-zinc-950 shadow-sm'
-                  : 'text-zinc-400 hover:text-zinc-200'
+                  ? 'bg-emerald-500 text-zinc-950 shadow-md shadow-emerald-900/30'
+                  : 'text-zinc-300 hover:bg-zinc-800/80 hover:text-white'
               }`}
             >
-              <span className="sm:hidden">{t.short}</span>
-              <span className="hidden sm:inline">{t.label}</span>
+              {t.label}
             </button>
           ))}
         </div>
