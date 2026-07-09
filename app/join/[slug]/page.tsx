@@ -516,11 +516,13 @@ export default function JoinPage() {
       if (!ok) return
     }
 
+    // Permitir siguiente aunque no haya status=playing (cola atascada solo en queued)
     if (
       (action === 'cancel_direct' || action === 'next') &&
-      !playing
+      !playing &&
+      waiting.length === 0
     ) {
-      setMessage('No hay música en reproducción')
+      setMessage('No hay música ni cola para saltar')
       return
     }
 
@@ -532,10 +534,9 @@ export default function JoinPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           venueSlug: slug,
-          tableName: isSuperSession(session)
-            ? SUPER_MESA_NAME
-            : session.tableName,
-          displayName: session.displayName,
+          // siempre mandar i9 si es super (API lo exige)
+          tableName: SUPER_MESA_NAME,
+          displayName: session.displayName || 'Super',
           action,
           queueItemId,
         }),
@@ -557,7 +558,10 @@ export default function JoinPage() {
       if (venue) {
         window.setTimeout(() => {
           void loadQueue(venue.id)
-        }, 600)
+        }, 400)
+        window.setTimeout(() => {
+          void loadQueue(venue.id)
+        }, 1500)
       }
     } catch {
       setMessage('Error de red en super poderes')
@@ -1081,7 +1085,9 @@ export default function JoinPage() {
             <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3">
               <button
                 type="button"
-                disabled={!!superBusy || !playing}
+                disabled={
+                  !!superBusy || (!playing && waiting.length === 0)
+                }
                 onClick={() => void runSuperAction('next')}
                 className="rounded-xl border border-violet-500/30 bg-violet-600/90 px-2 py-3 text-center text-xs font-bold text-white transition hover:bg-violet-500 disabled:opacity-40 sm:text-sm"
               >
@@ -1089,7 +1095,9 @@ export default function JoinPage() {
               </button>
               <button
                 type="button"
-                disabled={!!superBusy || !playing}
+                disabled={
+                  !!superBusy || (!playing && waiting.length === 0)
+                }
                 onClick={() => void runSuperAction('cancel_direct')}
                 className="rounded-xl border border-amber-600/40 bg-amber-700/80 px-2 py-3 text-center text-xs font-bold text-white transition hover:bg-amber-600 disabled:opacity-40 sm:text-sm"
               >

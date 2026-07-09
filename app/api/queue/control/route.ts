@@ -153,15 +153,38 @@ export async function POST(request: NextRequest) {
     }
 
     // next | cancel_direct
-    const playing = await findPlaying(supabase, venue.id)
-    if (!playing) {
+    // Si no hay "playing" (TV a veces deja todo en queued), saltamos el primero de la cola
+    let current = await findPlaying(supabase, venue.id)
+    let wasOnlyQueued = false
+    if (!current) {
+      current = await findFirstQueued(supabase, venue.id)
+      wasOnlyQueued = Boolean(current)
+    }
+    if (!current) {
       return NextResponse.json(
-        { error: 'No hay ninguna canción sonando', ok: false },
+        {
+          error: 'No hay canciones en reproducción ni en cola',
+          ok: false,
+        },
         { status: 400 }
       )
     }
 
-    await skipIds(supabase, venue.id, [playing.id])
+    const skipped = await skipIds(supabase, venue.id, [current.id])
+    if (skipped === 0) {
+      // reintentar sin filtro de status por si quedó en estado raro
+      const { data: force, error: fErr } = await supabase
+        .from('queue_items')
+        .update({ status: 'skipped' })
+        .eq('id', current.id)
+        .eq('venue_id', venue.id)
+        .select('id')
+      if (fErr) throw new Error(fErr.message)
+      if (!force?.length) {
+        throw new Error('No se pudo saltar la canción (UPDATE 0 filas)')
+      }
+    }
+
     const allowAutoplay =
       action === 'next' ? Boolean(cfg.autoplayMusic?.enabled) : false
     const promoted = await promoteNext(supabase, venue.id, allowAutoplay)
@@ -170,16 +193,17 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       ok: true,
       action,
-      skippedId: playing.id,
+      skippedId: current.id,
       nextId: promoted?.id ?? null,
       playingId: snapshot.playing?.id ?? null,
+      wasOnlyQueued,
       message:
         action === 'cancel_direct'
           ? promoted
             ? 'Cancelada · siguiente en cola'
-            : 'Música en reproducción cancelada'
+            : 'Canción cancelada · cola vacía'
           : promoted
-            ? 'Siguiente canción en marcha'
+            ? `Siguiente canción en marcha${wasOnlyQueued ? ' (cola sincronizada)' : ''}`
             : 'Saltada · no hay más en cola',
       queue: snapshot,
     })
@@ -202,6 +226,19 @@ async function findPlaying(supabase: SupabaseClient, venueId: string) {
     .eq('venue_id', venueId)
     .eq('status', 'playing')
     .order('played_at', { ascending: true, nullsFirst: false })
+    .limit(1)
+
+  if (error) throw new Error(error.message)
+  return data?.[0] ?? null
+}
+
+async function findFirstQueued(supabase: SupabaseClient, venueId: string) {
+  const { data, error } = await supabase
+    .from('queue_items')
+    .select('id, status')
+    .eq('venue_id', venueId)
+    .eq('status', 'queued')
+    .order('added_at', { ascending: true })
     .limit(1)
 
   if (error) throw new Error(error.message)
