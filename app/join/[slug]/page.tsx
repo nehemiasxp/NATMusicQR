@@ -45,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.3'
+export const JOIN_UI_VERSION = '2.1.4'
 
 type Tab = 'queue' | 'local' | 'add'
 

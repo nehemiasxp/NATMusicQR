@@ -8,6 +8,8 @@ import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 3000
+/** Versión player (fade votos) */
+export const PLAYER_UI_VERSION = '2.1.3'
 
 type RuntimeFlags = {
   autoplayEnabled: boolean
@@ -381,7 +383,7 @@ export default function PlayerPage() {
               <div className="text-xs text-emerald-500/80">{liveNote}</div>
             )}
             <div className="text-xs text-zinc-500">
-              Autoplay: {autoplayOn ? 'ON' : 'OFF'}
+              Autoplay: {autoplayOn ? 'ON' : 'OFF'} · TV v{PLAYER_UI_VERSION}
             </div>
             {lastSync && (
               <div className="text-xs text-zinc-600">Sync {lastSync}</div>
@@ -407,16 +409,13 @@ export default function PlayerPage() {
               key={playingItem?.id}
               videoId={currentVideo.youtube_id}
               title={currentVideo.title}
-              onEnded={
-                fadeOutKey === playingItem?.id
-                  ? handleFadeOutComplete
-                  : handleEnded
-              }
+              onEnded={handleEnded}
+              onFadeComplete={handleFadeOutComplete}
               onError={handlePlayerError}
               fadeOutKey={
                 fadeOutKey === playingItem?.id ? fadeOutKey : null
               }
-              fadeOutMs={3200}
+              fadeOutMs={4500}
             />
           ) : (
             <div className="w-full h-full flex flex-col items-center justify-center text-center p-6">
