@@ -3,13 +3,14 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import YouTubePlayer from '@/components/YouTubePlayer'
+import LiveFeedOverlay from '@/components/LiveFeedOverlay'
 import { supabase } from '@/lib/supabase'
 import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 1500
-/** Versión player — iframe persistente loadVideoById (iOS-safe) */
-export const PLAYER_UI_VERSION = '2.3.0'
+/** Versión player — live feed comentarios + burbujas */
+export const PLAYER_UI_VERSION = '2.4.0'
 
 type RuntimeFlags = {
   autoplayEnabled: boolean
@@ -509,6 +510,8 @@ export default function PlayerPage() {
             }
             fadeOutMs={4500}
           />
+          {/* Comentarios TikTok + burbujas like (no bloquea el video) */}
+          {slug && <LiveFeedOverlay venueSlug={slug} />}
           {!currentVideo?.youtube_id && (
             <div className="pointer-events-none absolute inset-0 z-[6] flex flex-col items-center justify-center text-center p-6">
               <p className="text-xl text-zinc-400">Esperando canciones…</p>

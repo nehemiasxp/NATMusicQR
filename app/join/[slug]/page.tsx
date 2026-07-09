@@ -45,8 +45,8 @@ type SearchItem = {
   thumbnailUrl: string | null
 }
 
-/** v2.2 — super poderes mesa i9 (control TV robusto) */
-export const JOIN_UI_VERSION = '2.2.2'
+/** v2.4 — comentarios TV + burbujas like */
+export const JOIN_UI_VERSION = '2.4.0'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -100,6 +100,8 @@ export default function JoinPage() {
   const [showMesas, setShowMesas] = useState(false)
   const [activeMesas, setActiveMesas] = useState<ActiveMesa[]>([])
   const [superBusy, setSuperBusy] = useState<string | null>(null)
+  const [commentText, setCommentText] = useState('')
+  const [commentBusy, setCommentBusy] = useState(false)
 
   // Cargar sesión de mesa + deviceId + reglas
   useEffect(() => {
@@ -286,6 +288,40 @@ export default function JoinPage() {
     }
   }, [playing?.id, rules?.voting?.enabled, deviceId])
 
+  async function emitLiveFeed(
+    kind: 'comment' | 'like' | 'dislike',
+    body?: string
+  ) {
+    if (!slug || !session || !deviceId) return { ok: false as const, error: 'Sin sesión' }
+    try {
+      const res = await fetch('/api/live/feed', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venueSlug: slug,
+          kind,
+          body,
+          displayName: session.displayName || session.tableName,
+          tableName: session.tableName,
+          deviceId,
+          queueItemId: playing?.id,
+          accessPin: session.accessPin || pinInput.trim() || undefined,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        return {
+          ok: false as const,
+          error: data.error || 'No se pudo enviar',
+          code: data.code as string | undefined,
+        }
+      }
+      return { ok: true as const }
+    } catch {
+      return { ok: false as const, error: 'Error de red' }
+    }
+  }
+
   async function castVote(vote: 'up' | 'down') {
     // Votos válidos para pedidos de mesa Y para autoplay del catálogo
     if (!slug || !session || !playing?.id || !deviceId || voteBusy) return
@@ -314,6 +350,8 @@ export default function JoinPage() {
       setVoteUp(data.up ?? 0)
       setVoteDown(data.down ?? 0)
       setMyVote(data.myVote ?? vote)
+      // Burbuja temporal en la TV (no bloquea si falla anti-spam)
+      void emitLiveFeed(vote === 'up' ? 'like' : 'dislike')
       if (data.shouldSkip) {
         setMessage('La sala rechazó el tema… la TV bajará el volumen y cambiará')
       }
@@ -322,6 +360,27 @@ export default function JoinPage() {
     } finally {
       setVoteBusy(false)
     }
+  }
+
+  async function sendComment(e?: React.FormEvent) {
+    e?.preventDefault()
+    if (!slug || !session || commentBusy) return
+    const text = commentText.trim()
+    if (text.length < 1) {
+      setMessage('Escribe un comentario')
+      return
+    }
+    setCommentBusy(true)
+    setMessage(null)
+    const result = await emitLiveFeed('comment', text)
+    if (!result.ok) {
+      setMessage(result.error)
+      setCommentBusy(false)
+      return
+    }
+    setCommentText('')
+    setMessage('Comentario en la TV ✨')
+    setCommentBusy(false)
   }
 
   async function runSuperAction(
@@ -1018,6 +1077,37 @@ export default function JoinPage() {
                   </p>
                 </div>
               )}
+
+              {/* Comentario en TV (TikTok-style, anti-spam en servidor) */}
+              <div className="border-t border-white/10 pt-4">
+                <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
+                  Comentar en la pantalla
+                </p>
+                <form
+                  onSubmit={(e) => void sendComment(e)}
+                  className="flex gap-2"
+                >
+                  <input
+                    type="text"
+                    value={commentText}
+                    onChange={(e) => setCommentText(e.target.value)}
+                    maxLength={80}
+                    placeholder="Di algo a la sala…"
+                    className="min-w-0 flex-1 rounded-xl border border-zinc-700 bg-zinc-950/80 px-3 py-2.5 text-sm outline-none focus:border-emerald-500/50"
+                    disabled={commentBusy}
+                  />
+                  <button
+                    type="submit"
+                    disabled={commentBusy || !commentText.trim()}
+                    className="shrink-0 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
+                  >
+                    {commentBusy ? '…' : 'Enviar'}
+                  </button>
+                </form>
+                <p className="mt-1.5 text-center text-[10px] text-zinc-600">
+                  Máx. 80 caracteres · 1 comentario cada ~18 s (anti-spam)
+                </p>
+              </div>
             </div>
           ) : (
             <p className="p-4 text-sm text-zinc-400">
