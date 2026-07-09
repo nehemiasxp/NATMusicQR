@@ -15,7 +15,6 @@ import { getOrCreateDeviceId } from '@/lib/device-id'
 import {
   isSuperMesa,
   isSuperSession,
-  normalizeSuperTableName,
   urlRequestsSuper,
   SUPER_MESA_NAME,
 } from '@/lib/super-mesa'
