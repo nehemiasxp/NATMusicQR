@@ -45,8 +45,8 @@ type SearchItem = {
   thumbnailUrl: string | null
 }
 
-/** v2.4 — comentarios TV + burbujas like */
-export const JOIN_UI_VERSION = '2.4.0'
+/** v2.4.1 — comentarios arriba + feed visible en join */
+export const JOIN_UI_VERSION = '2.4.1'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -102,6 +102,9 @@ export default function JoinPage() {
   const [superBusy, setSuperBusy] = useState<string | null>(null)
   const [commentText, setCommentText] = useState('')
   const [commentBusy, setCommentBusy] = useState(false)
+  const [liveComments, setLiveComments] = useState<
+    Array<{ id: string; display_name: string; body: string | null; kind: string }>
+  >([])
 
   // Cargar sesión de mesa + deviceId + reglas
   useEffect(() => {
@@ -380,8 +383,71 @@ export default function JoinPage() {
     }
     setCommentText('')
     setMessage('Comentario en la TV ✨')
+    setLiveComments((prev) =>
+      [
+        {
+          id: `local-${Date.now()}`,
+          display_name: session.displayName || session.tableName,
+          body: text,
+          kind: 'comment',
+        },
+        ...prev,
+      ].slice(0, 8)
+    )
     setCommentBusy(false)
   }
+
+  // Feed en vivo para todos los celulares (misma sala)
+  useEffect(() => {
+    if (!slug || !session) return
+    let cancelled = false
+    let since = new Date(Date.now() - 60_000).toISOString()
+
+    async function pollFeed() {
+      try {
+        const res = await fetch(
+          `/api/live/feed?venueSlug=${encodeURIComponent(slug!)}&since=${encodeURIComponent(since)}`,
+          { cache: 'no-store' }
+        )
+        const data = await res.json()
+        if (cancelled || !res.ok) return
+        if (data.serverTime) {
+          const t = Date.parse(data.serverTime) - 3000
+          if (!Number.isNaN(t)) since = new Date(t).toISOString()
+        }
+        const items = (data.items ?? []) as Array<{
+          id: string
+          display_name: string
+          body: string | null
+          kind: string
+        }>
+        if (items.length === 0) return
+        setLiveComments((prev) => {
+          const map = new Map(prev.map((p) => [p.id, p]))
+          for (const it of items) {
+            if (
+              it.kind === 'comment' ||
+              it.kind === 'like' ||
+              it.kind === 'dislike'
+            ) {
+              map.set(it.id, it)
+            }
+          }
+          // Más recientes primero
+          return Array.from(map.values()).slice(-10).reverse()
+        })
+      } catch {
+        /* ignore */
+      }
+    }
+
+    void pollFeed()
+    const t = setInterval(pollFeed, 2000)
+    return () => {
+      cancelled = true
+      clearInterval(t)
+    }
+  }, [slug, session])
 
   async function runSuperAction(
     action: 'next' | 'cancel_direct' | 'cancel_all' | 'remove',
@@ -884,6 +950,67 @@ export default function JoinPage() {
           />
         )}
 
+        {/* Sala en vivo: comentarios arriba (todos los usuarios) */}
+        <section className="mb-4 overflow-hidden rounded-2xl border border-sky-800/50 bg-gradient-to-br from-sky-950/50 to-zinc-900/80">
+          <div className="border-b border-white/5 px-4 py-2.5">
+            <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-sky-400">
+              💬 Sala en vivo · se ve en la TV
+            </p>
+          </div>
+          <div className="space-y-3 p-4">
+            <form
+              onSubmit={(e) => void sendComment(e)}
+              className="flex gap-2"
+            >
+              <input
+                type="text"
+                value={commentText}
+                onChange={(e) => setCommentText(e.target.value)}
+                maxLength={80}
+                placeholder="Escribe un comentario para la pantalla…"
+                className="min-w-0 flex-1 rounded-xl border border-zinc-700 bg-zinc-950/80 px-3 py-3 text-sm outline-none focus:border-sky-500/50"
+                disabled={commentBusy}
+              />
+              <button
+                type="submit"
+                disabled={commentBusy || !commentText.trim()}
+                className="shrink-0 rounded-xl bg-sky-600 px-4 py-3 text-sm font-bold text-white transition hover:bg-sky-500 disabled:opacity-40"
+              >
+                {commentBusy ? '…' : 'Enviar'}
+              </button>
+            </form>
+            <p className="text-[10px] text-zinc-500">
+              Aparece arriba en la TV (también a pantalla completa) · anti-spam ~18 s
+            </p>
+            {liveComments.length > 0 && (
+              <div className="max-h-36 space-y-1.5 overflow-y-auto">
+                {liveComments.map((c) => (
+                  <div
+                    key={c.id}
+                    className="flex items-start gap-2 rounded-lg bg-zinc-950/50 px-2.5 py-1.5 text-sm"
+                  >
+                    <span className="shrink-0 text-base leading-none">
+                      {c.kind === 'like'
+                        ? '👍'
+                        : c.kind === 'dislike'
+                          ? '👎'
+                          : '💬'}
+                    </span>
+                    <p className="min-w-0 flex-1 text-zinc-200">
+                      <span className="font-semibold text-sky-300">
+                        {c.display_name}
+                      </span>
+                      {c.body ? (
+                        <span className="text-zinc-300"> · {c.body}</span>
+                      ) : null}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </section>
+
         {/* Super poderes — solo mesa i9 */}
         {superMode && (
           <section className="mb-4 overflow-hidden rounded-2xl border border-violet-500/40 bg-gradient-to-br from-violet-950/80 to-zinc-900 shadow-lg shadow-violet-950/30">
@@ -1078,36 +1205,6 @@ export default function JoinPage() {
                 </div>
               )}
 
-              {/* Comentario en TV (TikTok-style, anti-spam en servidor) */}
-              <div className="border-t border-white/10 pt-4">
-                <p className="mb-2 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-zinc-400">
-                  Comentar en la pantalla
-                </p>
-                <form
-                  onSubmit={(e) => void sendComment(e)}
-                  className="flex gap-2"
-                >
-                  <input
-                    type="text"
-                    value={commentText}
-                    onChange={(e) => setCommentText(e.target.value)}
-                    maxLength={80}
-                    placeholder="Di algo a la sala…"
-                    className="min-w-0 flex-1 rounded-xl border border-zinc-700 bg-zinc-950/80 px-3 py-2.5 text-sm outline-none focus:border-emerald-500/50"
-                    disabled={commentBusy}
-                  />
-                  <button
-                    type="submit"
-                    disabled={commentBusy || !commentText.trim()}
-                    className="shrink-0 rounded-xl bg-emerald-600 px-4 py-2.5 text-sm font-bold text-white transition hover:bg-emerald-500 disabled:opacity-40"
-                  >
-                    {commentBusy ? '…' : 'Enviar'}
-                  </button>
-                </form>
-                <p className="mt-1.5 text-center text-[10px] text-zinc-600">
-                  Máx. 80 caracteres · 1 comentario cada ~18 s (anti-spam)
-                </p>
-              </div>
             </div>
           ) : (
             <p className="p-4 text-sm text-zinc-400">

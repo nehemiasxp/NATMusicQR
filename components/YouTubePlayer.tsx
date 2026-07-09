@@ -336,7 +336,9 @@ export default function YouTubePlayer({
           playsinline: 1,
           // Primer autoplay con mute (política Safari/iOS)
           mute: 1,
-          fs: 1,
+          // Fullscreen nativo de YT OFF: usamos fullscreen del stage
+          // (así comentarios/burbujas siguen visibles en pantalla completa)
+          fs: 0,
           origin:
             typeof window !== 'undefined' ? window.location.origin : '',
         },

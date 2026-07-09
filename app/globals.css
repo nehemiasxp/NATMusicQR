@@ -25,27 +25,44 @@ body {
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
 }
 
-/* Burbujas like/dislike en TV (LiveFeedOverlay) */
-@keyframes live-feed-bubble {
+/* Burbujas like/dislike en TV — suben hacia arriba */
+@keyframes live-feed-bubble-top {
   0% {
     opacity: 0;
-    transform: translateY(20px) scale(0.85);
+    transform: translateY(24px) scale(0.85);
   }
-  12% {
+  14% {
     opacity: 1;
     transform: translateY(0) scale(1);
   }
-  70% {
+  65% {
     opacity: 1;
-    transform: translateY(-70px) scale(1.05);
+    transform: translateY(-80px) scale(1.06);
   }
   100% {
     opacity: 0;
-    transform: translateY(-130px) scale(0.9);
+    transform: translateY(-140px) scale(0.92);
   }
 }
 
-.live-feed-bubble {
-  animation: live-feed-bubble 2.8s ease-out forwards;
+.live-feed-bubble-top {
+  animation: live-feed-bubble-top 3s ease-out forwards;
   pointer-events: none;
+}
+
+/* Stage TV a pantalla completa (incluye overlay de comentarios) */
+.player-stage:fullscreen,
+.player-stage:-webkit-full-screen {
+  width: 100vw;
+  height: 100vh;
+  max-width: none;
+  border-radius: 0;
+  border: none;
+  background: #000;
+}
+
+.player-stage:fullscreen .player-stage-video,
+.player-stage:-webkit-full-screen .player-stage-video {
+  height: 100%;
+  aspect-ratio: auto;
 }

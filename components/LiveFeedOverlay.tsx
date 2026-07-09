@@ -1,9 +1,10 @@
 'use client'
 
 /**
- * Overlay TV estilo TikTok:
- * - Comentarios: uno a la vez, "respiración", no invasivo
- * - Likes/dislikes: burbujas flotantes temporales
+ * Overlay TV estilo TikTok — parte SUPERIOR, visible también en fullscreen del stage.
+ * - Comentarios: arriba, uno a la vez, respiración suave
+ * - Likes: burbujas arriba-derecha, temporales
+ * pointer-events: none (no tapa controles del stage)
  */
 
 import { useCallback, useEffect, useRef, useState } from 'react'
@@ -20,15 +21,21 @@ type Bubble = {
 type Props = {
   venueSlug: string
   pollMs?: number
+  /** true = stage a pantalla completa (tipografía más grande) */
+  fullscreen?: boolean
 }
 
-const COMMENT_SHOW_MS = 5200
-const COMMENT_GAP_MS = 1600
-const BUBBLE_LIFE_MS = 2800
+const COMMENT_SHOW_MS = 5500
+const COMMENT_GAP_MS = 1400
+const BUBBLE_LIFE_MS = 3000
 
-export default function LiveFeedOverlay({ venueSlug, pollMs = 1200 }: Props) {
+export default function LiveFeedOverlay({
+  venueSlug,
+  pollMs = 1000,
+  fullscreen = false,
+}: Props) {
   const seenRef = useRef<Set<string>>(new Set())
-  const sinceRef = useRef<string>(new Date(Date.now() - 15_000).toISOString())
+  const sinceRef = useRef<string>(new Date(Date.now() - 20_000).toISOString())
   const commentQueueRef = useRef<LiveFeedItem[]>([])
   const showingCommentRef = useRef(false)
   const drainRef = useRef<() => void>(() => {})
@@ -36,6 +43,8 @@ export default function LiveFeedOverlay({ venueSlug, pollMs = 1200 }: Props) {
   const [comment, setComment] = useState<LiveFeedItem | null>(null)
   const [bubbles, setBubbles] = useState<Bubble[]>([])
   const [breathPhase, setBreathPhase] = useState(0)
+  /** Historial corto arriba (últimos 3) para que la sala siempre vea algo */
+  const [ticker, setTicker] = useState<LiveFeedItem[]>([])
 
   useEffect(() => {
     drainRef.current = () => {
@@ -46,11 +55,12 @@ export default function LiveFeedOverlay({ venueSlug, pollMs = 1200 }: Props) {
       showingCommentRef.current = true
       setComment(next)
       setBreathPhase(0)
+      setTicker((prev) => [next, ...prev.filter((p) => p.id !== next.id)].slice(0, 3))
 
       const breathTimers = [
-        window.setTimeout(() => setBreathPhase(1), 400),
-        window.setTimeout(() => setBreathPhase(2), 2200),
-        window.setTimeout(() => setBreathPhase(3), 4000),
+        window.setTimeout(() => setBreathPhase(1), 350),
+        window.setTimeout(() => setBreathPhase(2), 2000),
+        window.setTimeout(() => setBreathPhase(3), 4200),
       ]
 
       window.setTimeout(() => {
@@ -66,9 +76,8 @@ export default function LiveFeedOverlay({ venueSlug, pollMs = 1200 }: Props) {
 
   const enqueueComment = useCallback((item: LiveFeedItem) => {
     commentQueueRef.current.push(item)
-    // Máx. 6 en cola para no saturar la TV
-    if (commentQueueRef.current.length > 6) {
-      commentQueueRef.current = commentQueueRef.current.slice(-6)
+    if (commentQueueRef.current.length > 8) {
+      commentQueueRef.current = commentQueueRef.current.slice(-8)
     }
     drainRef.current()
   }, [])
@@ -80,10 +89,10 @@ export default function LiveFeedOverlay({ venueSlug, pollMs = 1200 }: Props) {
       key,
       kind: item.kind,
       name: item.display_name,
-      x: 8 + Math.random() * 34,
-      delay: Math.random() * 120,
+      x: 6 + Math.random() * 40,
+      delay: Math.random() * 100,
     }
-    setBubbles((prev) => [...prev, bubble].slice(-8))
+    setBubbles((prev) => [...prev, bubble].slice(-10))
     window.setTimeout(() => {
       setBubbles((prev) => prev.filter((b) => b.key !== key))
     }, BUBBLE_LIFE_MS + bubble.delay)
@@ -113,9 +122,8 @@ export default function LiveFeedOverlay({ venueSlug, pollMs = 1200 }: Props) {
         for (const item of items) {
           if (seenRef.current.has(item.id)) continue
           seenRef.current.add(item.id)
-          if (seenRef.current.size > 200) {
-            const arr = Array.from(seenRef.current)
-            seenRef.current = new Set(arr.slice(-100))
+          if (seenRef.current.size > 250) {
+            seenRef.current = new Set(Array.from(seenRef.current).slice(-120))
           }
 
           if (item.kind === 'comment') {
@@ -139,70 +147,108 @@ export default function LiveFeedOverlay({ venueSlug, pollMs = 1200 }: Props) {
 
   const breathScale =
     breathPhase === 1
-      ? 1.035
+      ? 1.04
       : breathPhase === 2
         ? 1.02
         : breathPhase === 3
-          ? 0.98
+          ? 0.97
           : 1
+
+  const nameSize = fullscreen ? 'text-xl sm:text-2xl' : 'text-base sm:text-lg'
+  const bodySize = fullscreen
+    ? 'text-2xl sm:text-3xl'
+    : 'text-lg sm:text-xl'
+  const avatarSize = fullscreen ? 'h-12 w-12 text-lg' : 'h-10 w-10 text-base'
 
   return (
     <div
-      className="pointer-events-none absolute inset-0 z-30 overflow-hidden"
+      className="pointer-events-none absolute inset-0 z-[40] overflow-hidden"
       aria-live="polite"
     >
-      {comment && (
-        <div
-          className="absolute bottom-[12%] left-[4%] right-[28%] max-w-xl transition-all duration-[900ms] ease-in-out"
-          style={{
-            transform: `scale(${breathScale}) translateY(${breathPhase === 3 ? 8 : 0}px)`,
-            opacity: breathPhase === 3 ? 0 : 1,
-          }}
-        >
-          <div className="rounded-2xl bg-black/45 px-5 py-4 shadow-2xl shadow-black/40 backdrop-blur-md ring-1 ring-white/10">
-            <div className="mb-1.5 flex items-center gap-2">
-              <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-violet-500 text-sm font-bold text-white shadow-md">
-                {(comment.display_name || '?').slice(0, 1).toUpperCase()}
-              </span>
-              <div className="min-w-0">
-                <p className="truncate text-base font-bold tracking-tight text-white drop-shadow">
-                  {comment.display_name}
-                </p>
-                {comment.table_label &&
-                  comment.table_label !== comment.display_name && (
-                    <p className="truncate text-[11px] text-zinc-300/80">
-                      {comment.table_label}
-                    </p>
-                  )}
+      {/* Franja superior: ticker + comentario principal */}
+      <div className="absolute inset-x-0 top-0 z-[41] bg-gradient-to-b from-black/70 via-black/35 to-transparent px-3 pb-16 pt-3 sm:px-5 sm:pt-4">
+        {/* Ticker de últimos comentarios (siempre visible si hay) */}
+        {ticker.length > 0 && !comment && (
+          <div className="mb-2 flex flex-wrap gap-2">
+            {ticker.map((t) => (
+              <div
+                key={t.id}
+                className="max-w-full truncate rounded-full bg-black/50 px-3 py-1 text-xs text-zinc-200 ring-1 ring-white/10 backdrop-blur-sm sm:text-sm"
+              >
+                <span className="font-bold text-emerald-300">
+                  {t.display_name}
+                </span>
+                <span className="text-zinc-400"> · </span>
+                <span>{t.body}</span>
               </div>
-            </div>
-            <p className="text-lg font-medium leading-snug text-zinc-50 drop-shadow-md sm:text-xl">
-              {comment.body}
-            </p>
+            ))}
           </div>
-        </div>
-      )}
+        )}
 
+        {/* Comentario destacado (respiración) — PARTE SUPERIOR */}
+        {comment && (
+          <div
+            className="mx-auto w-full max-w-3xl transition-all duration-[850ms] ease-in-out"
+            style={{
+              transform: `scale(${breathScale}) translateY(${breathPhase === 3 ? -6 : 0}px)`,
+              opacity: breathPhase === 3 ? 0 : 1,
+            }}
+          >
+            <div className="rounded-2xl bg-black/55 px-4 py-3 shadow-2xl shadow-black/50 backdrop-blur-md ring-1 ring-white/15 sm:px-6 sm:py-4">
+              <div className="mb-2 flex items-center gap-3">
+                <span
+                  className={`flex shrink-0 items-center justify-center rounded-full bg-gradient-to-br from-emerald-400 to-violet-500 font-bold text-white shadow-md ${avatarSize}`}
+                >
+                  {(comment.display_name || '?').slice(0, 1).toUpperCase()}
+                </span>
+                <div className="min-w-0">
+                  <p
+                    className={`truncate font-bold tracking-tight text-white drop-shadow ${nameSize}`}
+                  >
+                    {comment.display_name}
+                  </p>
+                  {comment.table_label &&
+                    comment.table_label !== comment.display_name && (
+                      <p className="truncate text-xs text-zinc-300/90 sm:text-sm">
+                        {comment.table_label}
+                      </p>
+                    )}
+                </div>
+                <span className="ml-auto shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-zinc-300">
+                  en vivo
+                </span>
+              </div>
+              <p
+                className={`font-semibold leading-snug text-zinc-50 drop-shadow-md ${bodySize}`}
+              >
+                {comment.body}
+              </p>
+            </div>
+          </div>
+        )}
+      </div>
+
+      {/* Burbujas like — suben desde mitad superior derecha */}
       {bubbles.map((b) => (
         <div
           key={b.key}
-          className="live-feed-bubble absolute bottom-[8%]"
+          className="live-feed-bubble-top absolute top-[28%]"
           style={{
             right: `${b.x}%`,
             animationDelay: `${b.delay}ms`,
           }}
         >
           <div
-            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold shadow-lg backdrop-blur-sm ${
+            className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-bold shadow-lg backdrop-blur-sm sm:text-base ${
               b.kind === 'like'
-                ? 'bg-emerald-500/85 text-white ring-1 ring-emerald-300/40'
-                : 'bg-red-600/85 text-white ring-1 ring-red-300/40'
+                ? 'bg-emerald-500/90 text-white ring-1 ring-emerald-200/50'
+                : 'bg-red-600/90 text-white ring-1 ring-red-200/50'
             }`}
           >
-            <span className="text-base leading-none">
+            <span className="text-lg leading-none">
               {b.kind === 'like' ? '👍' : '👎'}
             </span>
-            <span className="max-w-[7rem] truncate">{b.name}</span>
+            <span className="max-w-[8rem] truncate">{b.name}</span>
           </div>
         </div>
       ))}

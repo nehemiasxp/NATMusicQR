@@ -9,8 +9,8 @@ import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 1500
-/** Versión player — live feed comentarios + burbujas */
-export const PLAYER_UI_VERSION = '2.4.0'
+/** Versión player — feed superior + fullscreen de stage */
+export const PLAYER_UI_VERSION = '2.4.1'
 
 type RuntimeFlags = {
   autoplayEnabled: boolean
@@ -39,6 +39,8 @@ export default function PlayerPage() {
   const [autoplayOn, setAutoplayOn] = useState(false)
   /** Dispara fade-out suave en YouTubePlayer antes de saltar por votos */
   const [fadeOutKey, setFadeOutKey] = useState<string | null>(null)
+  const [stageFullscreen, setStageFullscreen] = useState(false)
+  const stageRef = useRef<HTMLDivElement | null>(null)
 
   const advancingRef = useRef(false)
   const venueIdRef = useRef<string | null>(null)
@@ -451,6 +453,47 @@ export default function PlayerPage() {
   const nextYoutubeId =
     waiting.find((i) => i.videos?.youtube_id)?.videos?.youtube_id ?? null
 
+  useEffect(() => {
+    function onFsChange() {
+      const el = stageRef.current
+      const active =
+        document.fullscreenElement === el ||
+        // @ts-expect-error webkit
+        document.webkitFullscreenElement === el
+      setStageFullscreen(Boolean(active))
+    }
+    document.addEventListener('fullscreenchange', onFsChange)
+    document.addEventListener('webkitfullscreenchange', onFsChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange)
+      document.removeEventListener('webkitfullscreenchange', onFsChange)
+    }
+  }, [])
+
+  async function toggleStageFullscreen() {
+    const el = stageRef.current
+    if (!el) return
+    try {
+      const active =
+        document.fullscreenElement === el ||
+        // @ts-expect-error webkit
+        document.webkitFullscreenElement === el
+      if (active) {
+        if (document.exitFullscreen) await document.exitFullscreen()
+        // @ts-expect-error webkit
+        else if (document.webkitExitFullscreen) document.webkitExitFullscreen()
+      } else {
+        if (el.requestFullscreen) await el.requestFullscreen()
+        // @ts-expect-error webkit
+        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen()
+      }
+    } catch {
+      setPlayerNote(
+        'No se pudo poner pantalla completa. Usa F11 o el modo kiosko del navegador.'
+      )
+    }
+  }
+
   return (
     <div className="min-h-screen bg-black text-white p-4 md:p-6">
       <div className="max-w-6xl mx-auto">
@@ -473,11 +516,20 @@ export default function PlayerPage() {
             )}
             <div className="text-xs text-zinc-500">
               Autoplay: {autoplayOn ? 'ON' : 'OFF'} · TV v{PLAYER_UI_VERSION} ·
-              playlist
+              live
             </div>
             {lastSync && (
               <div className="text-xs text-zinc-600">Sync {lastSync}</div>
             )}
+            <button
+              type="button"
+              onClick={() => void toggleStageFullscreen()}
+              className="mt-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:border-emerald-600 hover:text-white"
+            >
+              {stageFullscreen
+                ? '⤓ Salir pantalla completa'
+                : '⛶ Pantalla completa (con comentarios)'}
+            </button>
           </div>
         </div>
 
@@ -494,41 +546,58 @@ export default function PlayerPage() {
         )}
 
         {/*
-          Un solo YouTubePlayer sin key por canción:
-          cambia de tema con loadVideoById (iOS no pierde el gesto).
+          Stage = video + overlay. Fullscreen de ESTE div (no del iframe YT)
+          para que comentarios/burbujas sigan visibles.
         */}
-        <div className="aspect-video bg-zinc-950 rounded-2xl mb-6 overflow-hidden border border-zinc-800 relative">
-          <YouTubePlayer
-            videoId={currentVideo?.youtube_id ?? null}
-            title={currentVideo?.title}
-            nextVideoId={nextYoutubeId}
-            onEnded={handleEnded}
-            onFadeComplete={handleFadeOutComplete}
-            onError={handlePlayerError}
-            fadeOutKey={
-              fadeOutKey === playingItem?.id ? fadeOutKey : null
-            }
-            fadeOutMs={4500}
-          />
-          {/* Comentarios TikTok + burbujas like (no bloquea el video) */}
-          {slug && <LiveFeedOverlay venueSlug={slug} />}
-          {!currentVideo?.youtube_id && (
-            <div className="pointer-events-none absolute inset-0 z-[6] flex flex-col items-center justify-center text-center p-6">
-              <p className="text-xl text-zinc-400">Esperando canciones…</p>
-              <p className="text-sm text-zinc-600 mt-2">
-                Escanea el QR y pide desde /join/{venue?.slug}
-              </p>
-              {autoplayOn ? (
-                <p className="text-xs text-emerald-500 mt-3">
-                  Autoplay ON — buscando canción del catálogo…
+        <div
+          ref={stageRef}
+          className="player-stage relative mb-6 overflow-hidden rounded-2xl border border-zinc-800 bg-zinc-950"
+        >
+          <div className="player-stage-video relative aspect-video w-full">
+            <YouTubePlayer
+              videoId={currentVideo?.youtube_id ?? null}
+              title={currentVideo?.title}
+              nextVideoId={nextYoutubeId}
+              onEnded={handleEnded}
+              onFadeComplete={handleFadeOutComplete}
+              onError={handlePlayerError}
+              fadeOutKey={
+                fadeOutKey === playingItem?.id ? fadeOutKey : null
+              }
+              fadeOutMs={4500}
+            />
+            {slug && (
+              <LiveFeedOverlay
+                venueSlug={slug}
+                fullscreen={stageFullscreen}
+              />
+            )}
+            {!currentVideo?.youtube_id && (
+              <div className="pointer-events-none absolute inset-0 z-[6] flex flex-col items-center justify-center text-center p-6">
+                <p className="text-xl text-zinc-400">Esperando canciones…</p>
+                <p className="text-sm text-zinc-600 mt-2">
+                  Escanea el QR y pide desde /join/{venue?.slug}
                 </p>
-              ) : (
-                <p className="text-xs text-zinc-600 mt-3">
-                  Autoplay OFF — actívalo en /admin y pulsa Guardar reglas
-                </p>
-              )}
-            </div>
-          )}
+                {autoplayOn ? (
+                  <p className="text-xs text-emerald-500 mt-3">
+                    Autoplay ON — buscando canción del catálogo…
+                  </p>
+                ) : (
+                  <p className="text-xs text-zinc-600 mt-3">
+                    Autoplay OFF — actívalo en /admin y pulsa Guardar reglas
+                  </p>
+                )}
+              </div>
+            )}
+          </div>
+          {/* Botón FS dentro del stage (también usable en kiosko) */}
+          <button
+            type="button"
+            onClick={() => void toggleStageFullscreen()}
+            className="absolute bottom-3 right-3 z-[50] rounded-lg border border-white/20 bg-black/60 px-3 py-1.5 text-xs font-semibold text-white backdrop-blur-sm hover:bg-black/80"
+          >
+            {stageFullscreen ? 'Salir FS' : 'Pantalla completa'}
+          </button>
         </div>
 
         {currentVideo && (
