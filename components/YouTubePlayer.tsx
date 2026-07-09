@@ -151,6 +151,9 @@ export default function YouTubePlayer({
   const [fading, setFading] = useState(false)
   const [fadeProgress, setFadeProgress] = useState(0)
   const [idle, setIdle] = useState(!videoId)
+  /** Dispara playOrLoad cuando el iframe ya está listo */
+  const [playerReady, setPlayerReady] = useState(false)
+  const [bootError, setBootError] = useState<string | null>(null)
 
   desiredIdRef.current = videoId?.trim() || null
 
@@ -317,109 +320,112 @@ export default function YouTubePlayer({
     wrap.appendChild(host)
 
     async function mountOnce() {
-      await loadYouTubeApi()
-      if (cancelled || !window.YT?.Player) return
-      if (playerRef.current) return
+      try {
+        await loadYouTubeApi()
+        if (cancelled || !window.YT?.Player) {
+          if (!cancelled) setBootError('No se cargó la API de YouTube')
+          return
+        }
+        if (playerRef.current) return
 
-      const initialId = desiredIdRef.current || undefined
+        const initialId = desiredIdRef.current || undefined
 
-      playerRef.current = new window.YT.Player(host, {
-        width: '100%',
-        height: '100%',
-        ...(initialId ? { videoId: initialId } : {}),
-        playerVars: {
-          autoplay: initialId ? 1 : 0,
-          controls: 1,
-          rel: 0,
-          modestbranding: 1,
-          // Crítico iOS: inline, no fullscreen forzado
-          playsinline: 1,
-          // Primer autoplay con mute (política Safari/iOS)
-          mute: 1,
-          // Fullscreen nativo de YT OFF: usamos fullscreen del stage
-          // (así comentarios/burbujas siguen visibles en pantalla completa)
-          fs: 0,
-          origin:
-            typeof window !== 'undefined' ? window.location.origin : '',
-        },
-        events: {
-          onReady: (event) => {
-            if (cancelled) return
-            readyRef.current = true
-            playerRef.current = event.target
+        playerRef.current = new window.YT.Player(host, {
+          width: '100%',
+          height: '100%',
+          ...(initialId ? { videoId: initialId } : {}),
+          playerVars: {
+            autoplay: initialId ? 1 : 0,
+            controls: 1,
+            rel: 0,
+            modestbranding: 1,
+            // Crítico iOS: inline, no fullscreen forzado
+            playsinline: 1,
+            // Primer autoplay con mute (política Safari/iOS)
+            mute: 1,
+            // Fullscreen nativo de YT OFF: usamos fullscreen del stage
+            fs: 0,
+            origin:
+              typeof window !== 'undefined' ? window.location.origin : '',
+          },
+          events: {
+            onReady: (event) => {
+              if (cancelled) return
+              readyRef.current = true
+              playerRef.current = event.target
+              setBootError(null)
+              setPlayerReady(true)
 
-            try {
-              event.target.mute()
-              event.target.setVolume(100)
-            } catch {
-              /* ignore */
-            }
+              try {
+                event.target.mute()
+                event.target.setVolume(100)
+              } catch {
+                /* ignore */
+              }
 
-            const want = desiredIdRef.current
-            if (want) {
-              loadedIdRef.current = want
-              // Si el constructor ya cargó otro id, forzar el deseado
-              const current = readLoadedVideoId(event.target)
-              if (current !== want) {
+              const want = desiredIdRef.current
+              if (want) {
                 try {
                   event.target.mute()
+                  // Siempre loadVideoById: consistente aunque el ctor ya tuviera id
                   event.target.loadVideoById({
                     videoId: want,
                     startSeconds: 0,
                   })
+                  loadedIdRef.current = want
                 } catch {
                   setNeedsGesture(true)
                 }
-              } else {
-                try {
-                  event.target.playVideo()
-                } catch {
-                  setNeedsGesture(true)
-                }
-              }
 
-              kickTimer = window.setTimeout(() => {
-                try {
-                  const st = event.target.getPlayerState()
-                  if (st === -1 || st === YT_PAUSED || st === YT_CUED) {
+                kickTimer = window.setTimeout(() => {
+                  try {
+                    const st = event.target.getPlayerState()
+                    if (st === -1 || st === YT_PAUSED || st === YT_CUED) {
+                      setNeedsGesture(true)
+                    }
+                  } catch {
                     setNeedsGesture(true)
                   }
-                } catch {
-                  setNeedsGesture(true)
-                }
-              }, 2500)
-            } else {
-              setIdle(true)
-            }
-          },
-          onStateChange: (event) => {
-            const state = event.data
-
-            if (state === YT_PLAYING) {
-              setNeedsGesture(false)
-              setIdle(false)
-              if (!fadingRef.current) {
-                restoreFullVolume(event.target)
+                }, 2500)
+              } else {
+                setIdle(true)
               }
-              const vid = readLoadedVideoId(event.target)
-              if (vid) loadedIdRef.current = vid
-            }
+            },
+            onStateChange: (event) => {
+              const state = event.data
 
-            if (state === YT_ENDED && !fadingRef.current) {
-              if (Date.now() < ignoreEndedUntilRef.current) return
-              if (finishedRef.current) return
-              finishedRef.current = true
-              onEndedRef.current()
-            }
+              if (state === YT_PLAYING) {
+                setNeedsGesture(false)
+                setIdle(false)
+                if (!fadingRef.current) {
+                  restoreFullVolume(event.target)
+                }
+                const vid = readLoadedVideoId(event.target)
+                if (vid) loadedIdRef.current = vid
+              }
+
+              if (state === YT_ENDED && !fadingRef.current) {
+                if (Date.now() < ignoreEndedUntilRef.current) return
+                if (finishedRef.current) return
+                finishedRef.current = true
+                onEndedRef.current()
+              }
+            },
+            onError: (event) => {
+              onErrorRef.current?.(event.data)
+            },
+            onAutoplayBlocked: () => {
+              setNeedsGesture(true)
+            },
           },
-          onError: (event) => {
-            onErrorRef.current?.(event.data)
-          },
-          onAutoplayBlocked: () => {
-            setNeedsGesture(true)
-          },
-        },
-      })
+        })
+      } catch (e) {
+        if (!cancelled) {
+          setBootError(
+            e instanceof Error ? e.message : 'Error al crear el player'
+          )
+        }
+      }
     }
 
     void mountOnce()
@@ -449,11 +455,11 @@ export default function YouTubePlayer({
 
   // ——— Cambio de canción: loadVideoById, sin remount ———
   useEffect(() => {
+    if (!playerReady || !readyRef.current || !playerRef.current) return
     const id = videoId?.trim() || null
-    if (!readyRef.current || !playerRef.current) return
     playOrLoad(id)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoId])
+  }, [videoId, playerReady])
 
   useEffect(() => {
     void nextVideoId
@@ -512,7 +518,23 @@ export default function YouTubePlayer({
         <span className="sr-only">Reproduciendo: {title}</span>
       ) : null}
 
-      {idle && !needsGesture && (
+      {bootError && (
+        <div className="absolute inset-0 z-[25] flex flex-col items-center justify-center bg-black/90 p-6 text-center">
+          <p className="text-lg font-semibold text-red-300">
+            Error del reproductor
+          </p>
+          <p className="mt-2 max-w-md text-sm text-zinc-400">{bootError}</p>
+          <button
+            type="button"
+            onClick={() => window.location.reload()}
+            className="mt-4 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white"
+          >
+            Recargar
+          </button>
+        </div>
+      )}
+
+      {idle && !needsGesture && !bootError && (
         <div className="pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black/80 p-6 text-center">
           <p className="text-xl text-zinc-400">Esperando canciones…</p>
           <p className="mt-2 text-sm text-zinc-600">

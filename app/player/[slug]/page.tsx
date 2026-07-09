@@ -9,8 +9,42 @@ import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 1500
-/** Versión player — feed superior + fullscreen de stage */
-export const PLAYER_UI_VERSION = '2.4.1'
+/** Versión player — fix hooks + fullscreen stage */
+export const PLAYER_UI_VERSION = '2.4.2'
+
+/** Fullscreen API con prefijos webkit (Safari) sin romper tipos */
+function getFullscreenElement(): Element | null {
+  const doc = document as Document & {
+    webkitFullscreenElement?: Element | null
+  }
+  return document.fullscreenElement ?? doc.webkitFullscreenElement ?? null
+}
+
+async function requestElFullscreen(el: HTMLElement) {
+  const node = el as HTMLElement & {
+    webkitRequestFullscreen?: () => void
+  }
+  if (el.requestFullscreen) {
+    await el.requestFullscreen()
+    return
+  }
+  if (node.webkitRequestFullscreen) {
+    node.webkitRequestFullscreen()
+  }
+}
+
+async function exitDocFullscreen() {
+  const doc = document as Document & {
+    webkitExitFullscreen?: () => void
+  }
+  if (document.exitFullscreen && document.fullscreenElement) {
+    await document.exitFullscreen()
+    return
+  }
+  if (doc.webkitExitFullscreen) {
+    doc.webkitExitFullscreen()
+  }
+}
 
 type RuntimeFlags = {
   autoplayEnabled: boolean
@@ -427,6 +461,44 @@ export default function PlayerPage() {
     }
   }, [slug, refreshQueue, loadFlags])
 
+  // Hooks SIEMPRE antes de cualquier return (si no, React rompe el player)
+  useEffect(() => {
+    function onFsChange() {
+      const el = stageRef.current
+      setStageFullscreen(Boolean(el && getFullscreenElement() === el))
+    }
+    document.addEventListener('fullscreenchange', onFsChange)
+    document.addEventListener('webkitfullscreenchange', onFsChange)
+    return () => {
+      document.removeEventListener('fullscreenchange', onFsChange)
+      document.removeEventListener('webkitfullscreenchange', onFsChange)
+    }
+  }, [])
+
+  const toggleStageFullscreen = useCallback(async () => {
+    const el = stageRef.current
+    if (!el) return
+    try {
+      const active = getFullscreenElement() === el
+      if (active) {
+        await exitDocFullscreen()
+      } else {
+        await requestElFullscreen(el)
+      }
+    } catch {
+      setPlayerNote(
+        'No se pudo poner pantalla completa. Usa F11 o el modo kiosko del navegador.'
+      )
+    }
+  }, [])
+
+  const currentVideo = playingItem?.videos ?? null
+  const waiting = queue.filter((i) => i.id !== playingItem?.id)
+  const isAutoplay = playingItem?.added_by_table?.includes('Autoplay')
+  /** Siguiente YouTube id (prefetch mental / UI) — el iframe NO se recrea */
+  const nextYoutubeId =
+    waiting.find((i) => i.videos?.youtube_id)?.videos?.youtube_id ?? null
+
   if (loading) {
     return (
       <div className="min-h-screen bg-black flex items-center justify-center text-white">
@@ -444,54 +516,6 @@ export default function PlayerPage() {
         </div>
       </div>
     )
-  }
-
-  const currentVideo = playingItem?.videos ?? null
-  const waiting = queue.filter((i) => i.id !== playingItem?.id)
-  const isAutoplay = playingItem?.added_by_table?.includes('Autoplay')
-  /** Siguiente YouTube id (prefetch mental / UI) — el iframe NO se recrea */
-  const nextYoutubeId =
-    waiting.find((i) => i.videos?.youtube_id)?.videos?.youtube_id ?? null
-
-  useEffect(() => {
-    function onFsChange() {
-      const el = stageRef.current
-      const active =
-        document.fullscreenElement === el ||
-        // @ts-expect-error webkit
-        document.webkitFullscreenElement === el
-      setStageFullscreen(Boolean(active))
-    }
-    document.addEventListener('fullscreenchange', onFsChange)
-    document.addEventListener('webkitfullscreenchange', onFsChange)
-    return () => {
-      document.removeEventListener('fullscreenchange', onFsChange)
-      document.removeEventListener('webkitfullscreenchange', onFsChange)
-    }
-  }, [])
-
-  async function toggleStageFullscreen() {
-    const el = stageRef.current
-    if (!el) return
-    try {
-      const active =
-        document.fullscreenElement === el ||
-        // @ts-expect-error webkit
-        document.webkitFullscreenElement === el
-      if (active) {
-        if (document.exitFullscreen) await document.exitFullscreen()
-        // @ts-expect-error webkit
-        else if (document.webkitExitFullscreen) document.webkitExitFullscreen()
-      } else {
-        if (el.requestFullscreen) await el.requestFullscreen()
-        // @ts-expect-error webkit
-        else if (el.webkitRequestFullscreen) el.webkitRequestFullscreen()
-      }
-    } catch {
-      setPlayerNote(
-        'No se pudo poner pantalla completa. Usa F11 o el modo kiosko del navegador.'
-      )
-    }
   }
 
   return (
@@ -523,7 +547,9 @@ export default function PlayerPage() {
             )}
             <button
               type="button"
-              onClick={() => void toggleStageFullscreen()}
+              onClick={() => {
+                void toggleStageFullscreen()
+              }}
               className="mt-1 rounded-lg border border-zinc-700 bg-zinc-900 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:border-emerald-600 hover:text-white"
             >
               {stageFullscreen
