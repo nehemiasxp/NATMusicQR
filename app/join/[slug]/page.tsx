@@ -13,6 +13,8 @@ import {
 } from '@/lib/mesa-session'
 import { getOrCreateDeviceId } from '@/lib/device-id'
 import { isSuperSession } from '@/lib/super-mesa'
+import { JOIN_UI_VERSION } from '@/lib/app-version'
+import VersionGuard from '@/components/VersionGuard'
 import type { QueueItem, Venue, Video } from '@/lib/types'
 
 type PublicConfig = {
@@ -44,9 +46,6 @@ type SearchItem = {
   channelTitle: string
   thumbnailUrl: string | null
 }
-
-/** v2.4.4 — feed TV + super i9 robustos */
-export const JOIN_UI_VERSION = '2.4.4'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -696,6 +695,7 @@ export default function JoinPage() {
   if (!session) {
     return (
       <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-4">
+        <VersionGuard mode="banner" />
         <div className="w-full max-w-md">
           <p className="text-emerald-400 text-xs tracking-[2px] uppercase font-medium">
             {venue?.name ?? 'NATMusicQR'}
@@ -836,6 +836,7 @@ export default function JoinPage() {
 
   return (
     <div className="min-h-screen bg-[#07080a] font-[family-name:var(--font-geist-sans)] text-zinc-100 antialiased">
+      <VersionGuard mode="banner" />
       <div className="mx-auto max-w-3xl px-4 py-5 pb-28">
         <header className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">

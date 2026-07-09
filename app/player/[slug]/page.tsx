@@ -4,13 +4,13 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { useParams } from 'next/navigation'
 import YouTubePlayer from '@/components/YouTubePlayer'
 import LiveFeedOverlay from '@/components/LiveFeedOverlay'
+import VersionGuard from '@/components/VersionGuard'
 import { supabase } from '@/lib/supabase'
 import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
+import { PLAYER_UI_VERSION } from '@/lib/app-version'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 1500
-/** Versión player — feed TV + super control */
-export const PLAYER_UI_VERSION = '2.4.4'
 
 /** Fullscreen API con prefijos webkit (Safari) sin romper tipos */
 function getFullscreenElement(): Element | null {
@@ -529,6 +529,7 @@ export default function PlayerPage() {
 
   return (
     <div className="min-h-screen bg-black text-white p-4 md:p-6">
+      <VersionGuard mode="auto" />
       <div className="max-w-6xl mx-auto">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
