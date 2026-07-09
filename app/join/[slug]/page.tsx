@@ -45,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.2'
+export const JOIN_UI_VERSION = '2.1.3'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -607,8 +607,12 @@ export default function JoinPage() {
 
   // ——— Jukebox (ya con mesa) ———
   const tabs: { id: Tab; label: string; short: string }[] = [
-    { id: 'queue', label: `En cola (${waiting.length})`, short: 'Cola' },
-    { id: 'local', label: 'Músicas del Local', short: 'Local' },
+    { id: 'queue', label: `En cola (${waiting.length})`, short: `Cola (${waiting.length})` },
+    {
+      id: 'local',
+      label: `Biblioteca de Música (${videos.length})`,
+      short: `Biblioteca (${videos.length})`,
+    },
     { id: 'add', label: '+ Añadir Música', short: '+ Añadir' },
   ]
 
@@ -796,7 +800,7 @@ export default function JoinPage() {
                   onClick={() => setTab('local')}
                   className="mt-3 text-sm font-medium text-emerald-400 hover:text-emerald-300"
                 >
-                  Ver músicas del local →
+                  Ver biblioteca de música →
                 </button>
               </div>
             ) : (
