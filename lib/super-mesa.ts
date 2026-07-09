@@ -1,44 +1,37 @@
 /**
- * Super poderes: mesa o nombre "i9", o flag de sesión, o URL ?super=1 / ?mesa=i9
+ * Super poderes SOLO con mesa/nombre exactamente "i9" (o "Mesa i9").
+ * No se activa por entrar al join normal.
  */
 
 export const SUPER_MESA_NAME = 'i9'
 
-function tokenIsSuper(raw: string | null | undefined): boolean {
-  if (!raw) return false
-  let t = raw.trim().toLowerCase()
-  if (!t) return false
-
-  // quitar acentos raros / puntos
-  t = t.replace(/[·•|]/g, ' ').replace(/\s+/g, ' ').trim()
-
-  if (t === SUPER_MESA_NAME) return true
-  if (t === `mesa ${SUPER_MESA_NAME}`) return true
-  if (t === `mesa${SUPER_MESA_NAME}`) return true
-
-  const stripped = t
-    .replace(/^mesa[\s_-]+/i, '')
-    .replace(/[\s_-]+/g, '')
-    .trim()
-  if (stripped === SUPER_MESA_NAME) return true
-
-  // token suelto i9
-  if (/(^|[\s._\-])i9($|[\s._\-])/i.test(t)) return true
-  // solo dígitos/letras: "i9"
-  if (/^i9$/i.test(stripped)) return true
-
-  return false
-}
-
+/** Solo coincidencias explícitas de i9 */
 export function isSuperMesa(label: string | null | undefined): boolean {
   if (!label) return false
-  const full = label.trim()
-  if (!full) return false
+  const t = label
+    .trim()
+    .toLowerCase()
+    .replace(/[·•|]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
 
-  // partes "Mesa 4 · i9"
-  const parts = full.split(/[·•|]/).map((p) => p.trim())
-  if (parts.some((p) => tokenIsSuper(p))) return true
-  return tokenIsSuper(full)
+  if (!t) return false
+  if (t === 'i9') return true
+  if (t === 'mesa i9') return true
+  if (t === 'mesa-i9' || t === 'mesa_i9') return true
+
+  // "Mesa 4 · i9" → algún segmento exacto
+  const parts = t.split(' ').filter(Boolean)
+  // re-split por si venía "mesa 4 · i9" ya normalizado
+  const segs = label
+    .split(/[·•|]/)
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean)
+  if (segs.some((s) => s === 'i9' || s === 'mesa i9')) return true
+
+  // último recurso: solo la palabra i9 sola tras quitar "mesa"
+  const stripped = t.replace(/^mesa\s+/, '').trim()
+  return stripped === 'i9'
 }
 
 export function isSuperSession(session: {
@@ -47,32 +40,39 @@ export function isSuperSession(session: {
   superUser?: boolean | null
 } | null): boolean {
   if (!session) return false
-  if (session.superUser === true) return true
+  // Flag solo cuenta si la mesa sigue siendo i9 (evita “admin eterno”)
+  if (session.superUser && isSuperMesa(session.tableName)) return true
   if (isSuperMesa(session.tableName)) return true
   if (isSuperMesa(session.displayName)) return true
   return false
 }
 
-/** ¿La URL pide super? ?super=1 | ?admin=1 | ?mesa=i9 | ?t=i9 */
+/**
+ * URL pide super de forma EXPLÍCITA:
+ * - ?super=1 | ?super=i9 | ?poder=1
+ * - ?mesa=i9 | ?mesa=Mesa%20i9 (no ?mesa=4)
+ */
 export function urlRequestsSuper(searchParams: {
   get: (key: string) => string | null
 }): boolean {
-  const superQ =
+  const superQ = (
     searchParams.get('super') ||
-    searchParams.get('admin') ||
-    searchParams.get('poder')
-  if (superQ && /^(1|true|yes|si|i9|on)$/i.test(superQ.trim())) return true
+    searchParams.get('poder') ||
+    ''
+  )
+    .trim()
+    .toLowerCase()
+  if (superQ && /^(1|true|yes|si|i9|on)$/i.test(superQ)) return true
 
+  // NO usar ?admin= (choca con /admin mentalmente); solo super/poder/mesa=i9
   const mesa =
     searchParams.get('mesa') ||
     searchParams.get('table') ||
     searchParams.get('t') ||
-    searchParams.get('name') ||
     ''
   return isSuperMesa(mesa)
 }
 
-/** Normaliza el nombre de mesa super a "i9" limpio */
 export function normalizeSuperTableName(raw: string): string {
   if (isSuperMesa(raw)) return SUPER_MESA_NAME
   return raw.trim()

@@ -31,6 +31,9 @@ export default function Home() {
       <div className="mt-12 text-xs text-zinc-600 space-y-1 text-center">
         <p>QR mesa 4 → /join/natmusicqr?mesa=4</p>
         <p>QR mesa 7 → /join/natmusicqr?mesa=7</p>
+        <p className="text-zinc-700">
+          Super control (solo dueño) → /join/natmusicqr?super=1
+        </p>
         <p>
           <Link href="/admin" className="text-zinc-500 hover:text-zinc-300">
             Admin de reglas →

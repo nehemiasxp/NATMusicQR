@@ -117,43 +117,43 @@ export default function JoinPage() {
     if (!slug) return
     setDeviceId(getOrCreateDeviceId())
 
-    // URL de super (?super=1 o ?mesa=i9): fuerza sesión super y limpia mesa vieja
+    /**
+     * IMPORTANTE:
+     * - Join normal (/join/xxx o ?mesa=4) SIEMPRE pide mesa si no hay sesión de cliente.
+     * - Nunca auto-entrar como super sin el usuario pulsar "Entrar".
+     * - Si había sesión super guardada y la URL NO es super → se limpia (evita “admin eterno”).
+     */
+    const existing = loadMesaSession(slug)
+
     if (wantSuper) {
+      // Solo precarga el formulario como i9; NO salta el login
       clearMesaSession(slug)
-      const saved = saveMesaSession(slug, {
-        tableName: SUPER_MESA_NAME,
-        displayName: 'Super',
-        superUser: true,
-        accessPin: null,
-      })
-      setSession(saved)
+      setSession(null)
       setMesaInput(SUPER_MESA_NAME)
       setNameInput('Super')
-      setSessionReady(true)
-      void fetch('/api/config')
-        .then((r) => r.json())
-        .then((data) => setRules(data as PublicConfig))
-        .catch(() => null)
-      return
-    }
-
-    const existing = loadMesaSession(slug)
-    if (existing) {
-      // Rehidratar flag super si la mesa es i9 aunque falte el flag viejo
-      if (isSuperSession(existing) && !existing.superUser) {
-        const fixed = saveMesaSession(slug, {
-          ...existing,
-          tableName: normalizeSuperTableName(existing.tableName),
-          superUser: true,
-        })
-        setSession(fixed)
+      setMessage('Modo super: revisa y pulsa «Entrar al jukebox»')
+    } else if (existing && isSuperSession(existing)) {
+      // Sesión admin vieja no debe reabrir sola al entrar “como mesa”
+      clearMesaSession(slug)
+      setSession(null)
+      if (qrMesa && !isSuperMesa(qrMesa)) {
+        setMesaInput(
+          qrMesa.startsWith('Mesa') || qrMesa.startsWith('mesa')
+            ? qrMesa
+            : `Mesa ${qrMesa}`
+        )
       } else {
-        setSession(existing)
+        setMesaInput('')
       }
+      setNameInput('')
+    } else if (existing) {
+      // Cliente normal: reanudar mesa guardada
+      setSession(existing)
     } else if (qrMesa) {
-      // No prefijar "Mesa " si es i9
       if (isSuperMesa(qrMesa)) {
+        // ?mesa=i9 → precarga, sigue pidiendo Entrar
         setMesaInput(SUPER_MESA_NAME)
+        setNameInput('Super')
       } else {
         setMesaInput(
           qrMesa.startsWith('Mesa') || qrMesa.startsWith('mesa')
@@ -162,6 +162,7 @@ export default function JoinPage() {
         )
       }
     }
+
     setSessionReady(true)
 
     void fetch('/api/config')
@@ -585,16 +586,15 @@ export default function JoinPage() {
       return
     }
 
-    const asSuper =
-      isSuperMesa(mesa) || isSuperMesa(nameInput) || wantSuper
+    // Super SOLO si escribieron i9 (no por querer “admin eterno”)
+    const asSuper = isSuperMesa(mesa) || isSuperMesa(nameInput.trim())
     if (asSuper) {
       mesa = SUPER_MESA_NAME
     }
 
     setMessage(null)
 
-    // Verificar horario + PIN en el servidor (el PIN no viaja en /api/config)
-    // Super i9: no bloquear por PIN si solo quiere controlar
+    // Todos (incl. super) pasan por el mismo acceso del local
     try {
       const res = await fetch('/api/access/verify', {
         method: 'POST',
@@ -603,34 +603,27 @@ export default function JoinPage() {
       })
       const data = await res.json()
       if (!res.ok || !data.ok) {
-        // Super puede entrar igual si el local pide PIN y no lo tiene a mano
-        if (!asSuper) {
-          setMessage(data.error || 'No se pudo entrar al jukebox')
-          if (data.access) {
-            setRules((r) =>
-              r
-                ? {
-                    ...r,
-                    access: { ...r.access, ...data.access },
-                  }
-                : r
-            )
-          }
-          return
+        setMessage(data.error || 'No se pudo entrar al jukebox')
+        if (data.access) {
+          setRules((r) =>
+            r
+              ? {
+                  ...r,
+                  access: { ...r.access, ...data.access },
+                }
+              : r
+          )
         }
-      }
-    } catch {
-      if (!asSuper) {
-        setMessage('Error de red al verificar acceso')
         return
       }
+    } catch {
+      setMessage('Error de red al verificar acceso')
+      return
     }
 
     const saved = saveMesaSession(slug, {
       tableName: mesa,
-      displayName: asSuper
-        ? nameInput.trim() || 'Super'
-        : nameInput.trim() || null,
+      displayName: nameInput.trim() || (asSuper ? 'Super' : null),
       accessPin: pinInput.trim() || null,
       superUser: asSuper,
     })
