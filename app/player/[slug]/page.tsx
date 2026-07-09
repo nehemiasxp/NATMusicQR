@@ -8,8 +8,8 @@ import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 1500
-/** Versión player — reacciona a super poderes (cancel remoto) */
-export const PLAYER_UI_VERSION = '2.2.0'
+/** Versión player — iframe persistente loadVideoById (iOS-safe) */
+export const PLAYER_UI_VERSION = '2.3.0'
 
 type RuntimeFlags = {
   autoplayEnabled: boolean
@@ -446,6 +446,9 @@ export default function PlayerPage() {
   const currentVideo = playingItem?.videos ?? null
   const waiting = queue.filter((i) => i.id !== playingItem?.id)
   const isAutoplay = playingItem?.added_by_table?.includes('Autoplay')
+  /** Siguiente YouTube id (prefetch mental / UI) — el iframe NO se recrea */
+  const nextYoutubeId =
+    waiting.find((i) => i.videos?.youtube_id)?.videos?.youtube_id ?? null
 
   return (
     <div className="min-h-screen bg-black text-white p-4 md:p-6">
@@ -468,7 +471,8 @@ export default function PlayerPage() {
               <div className="text-xs text-emerald-500/80">{liveNote}</div>
             )}
             <div className="text-xs text-zinc-500">
-              Autoplay: {autoplayOn ? 'ON' : 'OFF'} · TV v{PLAYER_UI_VERSION}
+              Autoplay: {autoplayOn ? 'ON' : 'OFF'} · TV v{PLAYER_UI_VERSION} ·
+              playlist
             </div>
             {lastSync && (
               <div className="text-xs text-zinc-600">Sync {lastSync}</div>
@@ -488,22 +492,25 @@ export default function PlayerPage() {
           </div>
         )}
 
-        <div className="aspect-video bg-zinc-950 rounded-2xl mb-6 overflow-hidden border border-zinc-800">
-          {currentVideo?.youtube_id ? (
-            <YouTubePlayer
-              key={playingItem?.id}
-              videoId={currentVideo.youtube_id}
-              title={currentVideo.title}
-              onEnded={handleEnded}
-              onFadeComplete={handleFadeOutComplete}
-              onError={handlePlayerError}
-              fadeOutKey={
-                fadeOutKey === playingItem?.id ? fadeOutKey : null
-              }
-              fadeOutMs={4500}
-            />
-          ) : (
-            <div className="w-full h-full flex flex-col items-center justify-center text-center p-6">
+        {/*
+          Un solo YouTubePlayer sin key por canción:
+          cambia de tema con loadVideoById (iOS no pierde el gesto).
+        */}
+        <div className="aspect-video bg-zinc-950 rounded-2xl mb-6 overflow-hidden border border-zinc-800 relative">
+          <YouTubePlayer
+            videoId={currentVideo?.youtube_id ?? null}
+            title={currentVideo?.title}
+            nextVideoId={nextYoutubeId}
+            onEnded={handleEnded}
+            onFadeComplete={handleFadeOutComplete}
+            onError={handlePlayerError}
+            fadeOutKey={
+              fadeOutKey === playingItem?.id ? fadeOutKey : null
+            }
+            fadeOutMs={4500}
+          />
+          {!currentVideo?.youtube_id && (
+            <div className="pointer-events-none absolute inset-0 z-[6] flex flex-col items-center justify-center text-center p-6">
               <p className="text-xl text-zinc-400">Esperando canciones…</p>
               <p className="text-sm text-zinc-600 mt-2">
                 Escanea el QR y pide desde /join/{venue?.slug}

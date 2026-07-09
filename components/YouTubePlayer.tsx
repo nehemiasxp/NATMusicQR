@@ -1,22 +1,34 @@
 'use client'
 
-import { useEffect, useId, useRef, useState } from 'react'
+/**
+ * Player YouTube estilo playlist (Spotify-like):
+ * - Un solo YT.Player / iframe durante toda la sesión de TV
+ * - Cambio de canción con loadVideoById (NO destroy/remount)
+ * - iOS/Safari: playsinline + mute inicial + onAutoplayBlocked
+ * - Host DOM fuera del control de React (evita que el iframe se pise)
+ *
+ * Docs: https://developers.google.com/youtube/iframe_api_reference
+ */
+
+import { useEffect, useRef, useState } from 'react'
 import Script from 'next/script'
 
 declare global {
   interface Window {
     YT?: {
       Player: new (
-        elementId: string,
+        elementId: string | HTMLElement,
         config: {
           width?: string | number
           height?: string | number
-          videoId: string
+          videoId?: string
+          host?: string
           playerVars?: Record<string, string | number>
           events?: {
             onReady?: (event: { target: YTPlayer }) => void
             onStateChange?: (event: { data: number; target: YTPlayer }) => void
             onError?: (event: { data: number }) => void
+            onAutoplayBlocked?: (event: { target: YTPlayer }) => void
           }
         }
       ) => YTPlayer
@@ -35,7 +47,16 @@ declare global {
 
 type YTPlayer = {
   destroy: () => void
-  loadVideoById: (videoId: string) => void
+  loadVideoById: (
+    videoIdOrOpts:
+      | string
+      | { videoId: string; startSeconds?: number; endSeconds?: number }
+  ) => void
+  cueVideoById: (
+    videoIdOrOpts:
+      | string
+      | { videoId: string; startSeconds?: number; endSeconds?: number }
+  ) => void
   playVideo: () => void
   pauseVideo: () => void
   mute: () => void
@@ -45,24 +66,26 @@ type YTPlayer = {
   setVolume: (volume: number) => void
   getVolume: () => number
   isMuted: () => boolean
+  getVideoData?: () => { video_id?: string }
 }
 
 type Props = {
-  videoId: string
+  /** YouTube video id actual. null/'' = idle (player sigue montado). */
+  videoId: string | null | undefined
   title?: string
-  /** Fin natural del video o error */
   onEnded: () => void
-  /** Fin tras fade por votos (salto suave) */
   onFadeComplete?: () => void
   onError?: (code: number) => void
-  /**
-   * Cuando se asigna un id (ej. queue item), inicia fade de volumen
-   * y al terminar llama onFadeComplete (o onEnded si no hay).
-   */
   fadeOutKey?: string | number | null
-  /** Duración del fade en ms */
   fadeOutMs?: number
+  /** Siguiente id (referencia UI; el cambio real va por videoId) */
+  nextVideoId?: string | null
 }
+
+const YT_ENDED = 0
+const YT_PLAYING = 1
+const YT_PAUSED = 2
+const YT_CUED = 5
 
 function loadYouTubeApi(): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve()
@@ -80,8 +103,18 @@ function loadYouTubeApi(): Promise<void> {
         window.clearInterval(timer)
         resolve()
       }
-    }, 50)
+    }, 40)
   })
+}
+
+function readLoadedVideoId(player: YTPlayer): string | null {
+  try {
+    const data = player.getVideoData?.()
+    if (data?.video_id) return data.video_id
+  } catch {
+    /* ignore */
+  }
+  return null
 }
 
 export default function YouTubePlayer({
@@ -92,24 +125,34 @@ export default function YouTubePlayer({
   onError,
   fadeOutKey = null,
   fadeOutMs = 4500,
+  nextVideoId = null,
 }: Props) {
-  const reactId = useId().replace(/:/g, '')
-  const containerId = `yt-player-${reactId}`
+  const wrapRef = useRef<HTMLDivElement | null>(null)
   const playerRef = useRef<YTPlayer | null>(null)
-  const onEndedRef = useRef(onEnded)
-  const onFadeCompleteRef = useRef(onFadeComplete)
-  const onErrorRef = useRef(onError)
-  const [needsClick, setNeedsClick] = useState(false)
-  const [fading, setFading] = useState(false)
-  const [fadeProgress, setFadeProgress] = useState(0)
+  const readyRef = useRef(false)
+  /** Tras PLAYING + unMute (gesto/sesión desbloqueada en iOS) */
+  const sessionUnlockedRef = useRef(false)
+  const desiredIdRef = useRef<string | null>(null)
+  const loadedIdRef = useRef<string | null>(null)
+  const ignoreEndedUntilRef = useRef(0)
+  const finishedRef = useRef(false)
   const fadingRef = useRef(false)
   const fadeRafRef = useRef<number | null>(null)
   const lastFadeKeyRef = useRef<string | number | null>(null)
-  const finishedRef = useRef(false)
 
+  const onEndedRef = useRef(onEnded)
+  const onFadeCompleteRef = useRef(onFadeComplete)
+  const onErrorRef = useRef(onError)
   onEndedRef.current = onEnded
   onFadeCompleteRef.current = onFadeComplete
   onErrorRef.current = onError
+
+  const [needsGesture, setNeedsGesture] = useState(false)
+  const [fading, setFading] = useState(false)
+  const [fadeProgress, setFadeProgress] = useState(0)
+  const [idle, setIdle] = useState(!videoId)
+
+  desiredIdRef.current = videoId?.trim() || null
 
   function cancelFadeLoop() {
     if (fadeRafRef.current != null) {
@@ -119,22 +162,90 @@ export default function YouTubePlayer({
   }
 
   function safeSetVolume(player: YTPlayer, vol: number) {
-    const v = Math.max(0, Math.min(100, Math.round(vol)))
     try {
-      if (player.isMuted()) player.unMute()
-    } catch {
-      /* ignore */
-    }
-    try {
-      player.setVolume(v)
+      player.setVolume(Math.max(0, Math.min(100, Math.round(vol))))
     } catch {
       /* ignore */
     }
   }
 
-  /**
-   * Fade suave con requestAnimationFrame (curva ease-in: más natural al final).
-   */
+  function restoreFullVolume(player: YTPlayer) {
+    try {
+      player.unMute()
+      player.setVolume(100)
+      sessionUnlockedRef.current = true
+      setNeedsGesture(false)
+    } catch {
+      /* iOS puede bloquear unMute hasta gesto */
+    }
+  }
+
+  function playOrLoad(id: string | null) {
+    const player = playerRef.current
+    if (!player || !readyRef.current) return
+
+    cancelFadeLoop()
+    fadingRef.current = false
+    finishedRef.current = false
+    setFading(false)
+    setFadeProgress(0)
+    lastFadeKeyRef.current = null
+
+    if (!id) {
+      setIdle(true)
+      try {
+        player.pauseVideo()
+        player.mute()
+      } catch {
+        /* ignore */
+      }
+      loadedIdRef.current = null
+      return
+    }
+
+    setIdle(false)
+    const already =
+      loadedIdRef.current === id || readLoadedVideoId(player) === id
+    ignoreEndedUntilRef.current = Date.now() + 1200
+
+    try {
+      if (already) {
+        if (sessionUnlockedRef.current) restoreFullVolume(player)
+        else player.mute()
+        player.playVideo()
+        return
+      }
+
+      // Misma sesión de media: loadVideoById (NO destroy, NO stopVideo)
+      if (sessionUnlockedRef.current) {
+        player.loadVideoById({ videoId: id, startSeconds: 0 })
+        window.setTimeout(() => {
+          if (desiredIdRef.current === id && playerRef.current) {
+            restoreFullVolume(playerRef.current)
+            try {
+              playerRef.current.playVideo()
+            } catch {
+              /* ignore */
+            }
+          }
+        }, 250)
+      } else {
+        player.mute()
+        player.loadVideoById({ videoId: id, startSeconds: 0 })
+        window.setTimeout(() => {
+          try {
+            player.playVideo()
+          } catch {
+            setNeedsGesture(true)
+          }
+        }, 80)
+      }
+      loadedIdRef.current = id
+    } catch {
+      setNeedsGesture(true)
+    }
+  }
+
   function startFadeOut(durationMs: number) {
     const player = playerRef.current
     if (!player || fadingRef.current || finishedRef.current) return
@@ -144,7 +255,6 @@ export default function YouTubePlayer({
     setFadeProgress(0)
     cancelFadeLoop()
 
-    // Asegurar audio activo antes de bajar
     try {
       player.unMute()
       player.playVideo()
@@ -156,7 +266,6 @@ export default function YouTubePlayer({
     try {
       const g = player.getVolume()
       if (typeof g === 'number' && !Number.isNaN(g) && g > 0) startVol = g
-      else startVol = 100
       player.setVolume(startVol)
     } catch {
       startVol = 100
@@ -168,10 +277,8 @@ export default function YouTubePlayer({
       if (finishedRef.current) return
       const elapsed = now - t0
       const t = Math.min(1, elapsed / durationMs)
-      // ease-in cúbico: se oye más “como se acaba”
       const eased = t * t * t
-      const vol = startVol * (1 - eased)
-      safeSetVolume(player, vol)
+      safeSetVolume(player, startVol * (1 - eased))
       setFadeProgress(Math.round(t * 100))
 
       if (t < 1) {
@@ -179,20 +286,16 @@ export default function YouTubePlayer({
         return
       }
 
-      // Silencio total y pausa (no stop brusco a mitad de frase de audio)
       safeSetVolume(player, 0)
       try {
         player.mute()
         player.pauseVideo()
       } catch {
-        try {
-          player.stopVideo()
-        } catch {
-          /* ignore */
-        }
+        /* ignore */
       }
 
       finishedRef.current = true
+      fadingRef.current = false
       const done = onFadeCompleteRef.current ?? onEndedRef.current
       done()
     }
@@ -200,96 +303,124 @@ export default function YouTubePlayer({
     fadeRafRef.current = requestAnimationFrame(tick)
   }
 
-  function fireNaturalEnded() {
-    if (finishedRef.current || fadingRef.current) return
-    finishedRef.current = true
-    onEndedRef.current()
-  }
-
+  // ——— Montar player UNA sola vez; host fuera del reconciler de React ———
   useEffect(() => {
     let cancelled = false
     let kickTimer: number | undefined
-    finishedRef.current = false
-    fadingRef.current = false
-    setFading(false)
-    setFadeProgress(0)
-    lastFadeKeyRef.current = null
-    cancelFadeLoop()
+    const wrap = wrapRef.current
+    if (!wrap) return
 
-    async function mountPlayer() {
+    // Nodo hijo gestionado solo por nosotros / YT (React no lo toca)
+    const host = document.createElement('div')
+    host.style.width = '100%'
+    host.style.height = '100%'
+    wrap.appendChild(host)
+
+    async function mountOnce() {
       await loadYouTubeApi()
       if (cancelled || !window.YT?.Player) return
+      if (playerRef.current) return
 
-      if (playerRef.current) {
-        try {
-          playerRef.current.destroy()
-        } catch {
-          /* ignore */
-        }
-        playerRef.current = null
-      }
+      const initialId = desiredIdRef.current || undefined
 
-      setNeedsClick(false)
-
-      playerRef.current = new window.YT.Player(containerId, {
+      playerRef.current = new window.YT.Player(host, {
         width: '100%',
         height: '100%',
-        videoId,
+        ...(initialId ? { videoId: initialId } : {}),
         playerVars: {
-          autoplay: 1,
+          autoplay: initialId ? 1 : 0,
           controls: 1,
           rel: 0,
           modestbranding: 1,
+          // Crítico iOS: inline, no fullscreen forzado
           playsinline: 1,
+          // Primer autoplay con mute (política Safari/iOS)
           mute: 1,
-          origin: window.location.origin,
+          fs: 1,
+          origin:
+            typeof window !== 'undefined' ? window.location.origin : '',
         },
         events: {
           onReady: (event) => {
+            if (cancelled) return
+            readyRef.current = true
+            playerRef.current = event.target
+
             try {
               event.target.mute()
               event.target.setVolume(100)
-              event.target.playVideo()
             } catch {
-              setNeedsClick(true)
+              /* ignore */
             }
 
-            kickTimer = window.setTimeout(() => {
-              try {
-                const state = event.target.getPlayerState()
-                if (state === -1 || state === 2 || state === 5) {
-                  setNeedsClick(true)
+            const want = desiredIdRef.current
+            if (want) {
+              loadedIdRef.current = want
+              // Si el constructor ya cargó otro id, forzar el deseado
+              const current = readLoadedVideoId(event.target)
+              if (current !== want) {
+                try {
+                  event.target.mute()
+                  event.target.loadVideoById({
+                    videoId: want,
+                    startSeconds: 0,
+                  })
+                } catch {
+                  setNeedsGesture(true)
                 }
-              } catch {
-                setNeedsClick(true)
+              } else {
+                try {
+                  event.target.playVideo()
+                } catch {
+                  setNeedsGesture(true)
+                }
               }
-            }, 2000)
+
+              kickTimer = window.setTimeout(() => {
+                try {
+                  const st = event.target.getPlayerState()
+                  if (st === -1 || st === YT_PAUSED || st === YT_CUED) {
+                    setNeedsGesture(true)
+                  }
+                } catch {
+                  setNeedsGesture(true)
+                }
+              }, 2500)
+            } else {
+              setIdle(true)
+            }
           },
           onStateChange: (event) => {
-            if (event.data === 1) {
-              setNeedsClick(false)
+            const state = event.data
+
+            if (state === YT_PLAYING) {
+              setNeedsGesture(false)
+              setIdle(false)
               if (!fadingRef.current) {
-                try {
-                  event.target.unMute()
-                  event.target.setVolume(100)
-                } catch {
-                  /* ignore */
-                }
+                restoreFullVolume(event.target)
               }
+              const vid = readLoadedVideoId(event.target)
+              if (vid) loadedIdRef.current = vid
             }
-            // ENDED natural (no durante fade)
-            if (event.data === 0 && !fadingRef.current) {
-              fireNaturalEnded()
+
+            if (state === YT_ENDED && !fadingRef.current) {
+              if (Date.now() < ignoreEndedUntilRef.current) return
+              if (finishedRef.current) return
+              finishedRef.current = true
+              onEndedRef.current()
             }
           },
           onError: (event) => {
             onErrorRef.current?.(event.data)
           },
+          onAutoplayBlocked: () => {
+            setNeedsGesture(true)
+          },
         },
       })
     }
 
-    void mountPlayer()
+    void mountOnce()
 
     return () => {
       cancelled = true
@@ -303,32 +434,57 @@ export default function YouTubePlayer({
         }
         playerRef.current = null
       }
+      readyRef.current = false
+      loadedIdRef.current = null
+      try {
+        wrap.innerHTML = ''
+      } catch {
+        /* ignore */
+      }
     }
-  }, [containerId, videoId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- montaje único de página
+  }, [])
 
-  // Iniciar fade cuando llega la señal de “salto por votos”
+  // ——— Cambio de canción: loadVideoById, sin remount ———
+  useEffect(() => {
+    const id = videoId?.trim() || null
+    if (!readyRef.current || !playerRef.current) return
+    playOrLoad(id)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [videoId])
+
+  useEffect(() => {
+    void nextVideoId
+  }, [nextVideoId])
+
   useEffect(() => {
     if (fadeOutKey == null || fadeOutKey === '') return
     if (lastFadeKeyRef.current === fadeOutKey) return
     lastFadeKeyRef.current = fadeOutKey
-
-    // Pequeño delay para que el player esté listo
-    const t = window.setTimeout(() => {
-      startFadeOut(fadeOutMs)
-    }, 80)
-
+    const t = window.setTimeout(() => startFadeOut(fadeOutMs), 60)
     return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fadeOutKey, fadeOutMs])
 
-  function handleManualStart() {
+  function handleUnlock() {
     const player = playerRef.current
     if (!player) return
     try {
+      sessionUnlockedRef.current = true
       player.unMute()
       player.setVolume(100)
-      player.playVideo()
-      setNeedsClick(false)
+      const want = desiredIdRef.current
+      if (want) {
+        if (loadedIdRef.current !== want) {
+          player.loadVideoById({ videoId: want, startSeconds: 0 })
+          loadedIdRef.current = want
+        } else {
+          player.playVideo()
+        }
+      } else {
+        player.playVideo()
+      }
+      setNeedsGesture(false)
     } catch {
       /* ignore */
     }
@@ -340,14 +496,28 @@ export default function YouTubePlayer({
         src="https://www.youtube.com/iframe_api"
         strategy="afterInteractive"
       />
+
+      {/* Solo este wrapper es de React; el iframe lo crea YT dentro */}
       <div
-        id={containerId}
+        ref={wrapRef}
         className="absolute inset-0 h-full w-full transition-opacity duration-500"
-        style={{ opacity: fading ? 1 - fadeProgress / 130 : 1 }}
+        style={{
+          opacity: fading ? Math.max(0.15, 1 - fadeProgress / 130) : 1,
+        }}
       />
+
       {title ? (
         <span className="sr-only">Reproduciendo: {title}</span>
       ) : null}
+
+      {idle && !needsGesture && (
+        <div className="pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black/80 p-6 text-center">
+          <p className="text-xl text-zinc-400">Esperando canciones…</p>
+          <p className="mt-2 text-sm text-zinc-600">
+            Player listo · sin recargar iframe
+          </p>
+        </div>
+      )}
 
       {fading && (
         <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-end bg-gradient-to-t from-black via-black/40 to-transparent pb-10">
@@ -366,14 +536,14 @@ export default function YouTubePlayer({
         </div>
       )}
 
-      {needsClick && !fading && (
+      {needsGesture && !fading && (
         <button
           type="button"
-          onClick={handleManualStart}
-          className="absolute inset-0 z-10 flex items-center justify-center bg-black/70 text-white"
+          onClick={handleUnlock}
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/75 text-white"
         >
           <span className="rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold shadow-lg hover:bg-emerald-500">
-            ▶ Iniciar reproducción
+            ▶ Toca para iniciar (iOS / TV)
           </span>
         </button>
       )}
