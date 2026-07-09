@@ -39,13 +39,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Falta venueSlug' }, { status: 400 })
   }
 
-  // Acepta i9 en mesa, nombre, o label combinado
+  // Solo por mesa/nombre i9 (no confiar en flags del cliente)
   const superOk =
     isSuperMesa(tableName) ||
     isSuperMesa(displayName) ||
-    isSuperMesa(
-      displayName ? `${tableName} · ${displayName}` : tableName
-    )
+    isSuperMesa(displayName ? `${tableName} · ${displayName}` : tableName)
 
   if (!superOk) {
     return NextResponse.json(

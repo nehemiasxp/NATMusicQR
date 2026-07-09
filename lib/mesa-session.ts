@@ -6,6 +6,8 @@ export type MesaSession = {
   joinedAt: string
   /** PIN del local verificado (se reenvía en cada pedido) */
   accessPin?: string | null
+  /** Super poderes (mesa i9 / URL super) */
+  superUser?: boolean
 }
 
 const PREFIX = 'natmusicqr:mesa:'
@@ -36,6 +38,7 @@ export function saveMesaSession(
     displayName: session.displayName?.trim() || null,
     joinedAt: session.joinedAt ?? new Date().toISOString(),
     accessPin: session.accessPin?.trim() || null,
+    superUser: Boolean(session.superUser),
   }
   localStorage.setItem(mesaStorageKey(venueSlug), JSON.stringify(value))
   return value

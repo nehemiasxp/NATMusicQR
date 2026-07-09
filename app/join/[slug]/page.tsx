@@ -12,7 +12,13 @@ import {
   type MesaSession,
 } from '@/lib/mesa-session'
 import { getOrCreateDeviceId } from '@/lib/device-id'
-import { isSuperSession } from '@/lib/super-mesa'
+import {
+  isSuperMesa,
+  isSuperSession,
+  normalizeSuperTableName,
+  urlRequestsSuper,
+  SUPER_MESA_NAME,
+} from '@/lib/super-mesa'
 import { JOIN_UI_VERSION } from '@/lib/app-version'
 import VersionGuard from '@/components/VersionGuard'
 import type { QueueItem, Venue, Video } from '@/lib/types'
@@ -66,6 +72,7 @@ export default function JoinPage() {
     searchParams.get('table') ||
     searchParams.get('t') ||
     ''
+  const wantSuper = urlRequestsSuper(searchParams)
 
   const [venue, setVenue] = useState<Venue | null>(null)
   const [videos, setVideos] = useState<Video[]>([])
@@ -108,20 +115,60 @@ export default function JoinPage() {
   // Cargar sesión de mesa + deviceId + reglas
   useEffect(() => {
     if (!slug) return
+    setDeviceId(getOrCreateDeviceId())
+
+    // URL de super (?super=1 o ?mesa=i9): fuerza sesión super y limpia mesa vieja
+    if (wantSuper) {
+      clearMesaSession(slug)
+      const saved = saveMesaSession(slug, {
+        tableName: SUPER_MESA_NAME,
+        displayName: 'Super',
+        superUser: true,
+        accessPin: null,
+      })
+      setSession(saved)
+      setMesaInput(SUPER_MESA_NAME)
+      setNameInput('Super')
+      setSessionReady(true)
+      void fetch('/api/config')
+        .then((r) => r.json())
+        .then((data) => setRules(data as PublicConfig))
+        .catch(() => null)
+      return
+    }
+
     const existing = loadMesaSession(slug)
     if (existing) {
-      setSession(existing)
+      // Rehidratar flag super si la mesa es i9 aunque falte el flag viejo
+      if (isSuperSession(existing) && !existing.superUser) {
+        const fixed = saveMesaSession(slug, {
+          ...existing,
+          tableName: normalizeSuperTableName(existing.tableName),
+          superUser: true,
+        })
+        setSession(fixed)
+      } else {
+        setSession(existing)
+      }
     } else if (qrMesa) {
-      setMesaInput(qrMesa.startsWith('Mesa') ? qrMesa : `Mesa ${qrMesa}`)
+      // No prefijar "Mesa " si es i9
+      if (isSuperMesa(qrMesa)) {
+        setMesaInput(SUPER_MESA_NAME)
+      } else {
+        setMesaInput(
+          qrMesa.startsWith('Mesa') || qrMesa.startsWith('mesa')
+            ? qrMesa
+            : `Mesa ${qrMesa}`
+        )
+      }
     }
-    setDeviceId(getOrCreateDeviceId())
     setSessionReady(true)
 
     void fetch('/api/config')
       .then((r) => r.json())
       .then((data) => setRules(data as PublicConfig))
       .catch(() => null)
-  }, [slug, qrMesa])
+  }, [slug, qrMesa, wantSuper])
 
   const loadQueue = useCallback(async (venueId: string) => {
     const { items, error: queueError } = await fetchActiveQueue(venueId)
@@ -485,7 +532,9 @@ export default function JoinPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           venueSlug: slug,
-          tableName: session.tableName,
+          tableName: isSuperSession(session)
+            ? SUPER_MESA_NAME
+            : session.tableName,
           displayName: session.displayName,
           action,
           queueItemId,
@@ -530,15 +579,22 @@ export default function JoinPage() {
   async function handleJoinMesa(e: React.FormEvent) {
     e.preventDefault()
     if (!slug) return
-    const mesa = mesaInput.trim()
+    let mesa = mesaInput.trim()
     if (!mesa) {
       setMessage('Indica el número o nombre de tu mesa')
       return
     }
 
+    const asSuper =
+      isSuperMesa(mesa) || isSuperMesa(nameInput) || wantSuper
+    if (asSuper) {
+      mesa = SUPER_MESA_NAME
+    }
+
     setMessage(null)
 
     // Verificar horario + PIN en el servidor (el PIN no viaja en /api/config)
+    // Super i9: no bloquear por PIN si solo quiere controlar
     try {
       const res = await fetch('/api/access/verify', {
         method: 'POST',
@@ -547,31 +603,39 @@ export default function JoinPage() {
       })
       const data = await res.json()
       if (!res.ok || !data.ok) {
-        setMessage(data.error || 'No se pudo entrar al jukebox')
-        if (data.access) {
-          setRules((r) =>
-            r
-              ? {
-                  ...r,
-                  access: { ...r.access, ...data.access },
-                }
-              : r
-          )
+        // Super puede entrar igual si el local pide PIN y no lo tiene a mano
+        if (!asSuper) {
+          setMessage(data.error || 'No se pudo entrar al jukebox')
+          if (data.access) {
+            setRules((r) =>
+              r
+                ? {
+                    ...r,
+                    access: { ...r.access, ...data.access },
+                  }
+                : r
+            )
+          }
+          return
         }
-        return
       }
     } catch {
-      setMessage('Error de red al verificar acceso')
-      return
+      if (!asSuper) {
+        setMessage('Error de red al verificar acceso')
+        return
+      }
     }
 
     const saved = saveMesaSession(slug, {
       tableName: mesa,
-      displayName: nameInput.trim() || null,
+      displayName: asSuper
+        ? nameInput.trim() || 'Super'
+        : nameInput.trim() || null,
       accessPin: pinInput.trim() || null,
+      superUser: asSuper,
     })
     setSession(saved)
-    setMessage(null)
+    setMessage(asSuper ? '⚡ Super poderes activados' : null)
   }
 
   function handleChangeMesa() {
