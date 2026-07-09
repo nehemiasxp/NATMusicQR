@@ -45,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.6'
+export const JOIN_UI_VERSION = '2.1.7'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -1070,7 +1070,7 @@ export default function JoinPage() {
                 <button
                   type="submit"
                   disabled={searching}
-                  className="w-full rounded-xl bg-white py-2.5 text-sm font-semibold text-zinc-900 transition hover:bg-zinc-100 disabled:opacity-50"
+                  className="w-full rounded-xl bg-red-600 py-3.5 text-base font-bold tracking-tight text-white shadow-lg shadow-red-950/40 transition hover:bg-red-500 disabled:opacity-50 sm:text-lg"
                 >
                   {searching ? 'Buscando…' : 'Buscar en YouTube'}
                 </button>
