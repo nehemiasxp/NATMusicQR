@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import {
   mergeJukeboxConfig,
-  publicJukeboxConfig,
   type RuntimeJukeboxConfig,
 } from '@/config/jukebox.config'
 import {
@@ -9,18 +8,43 @@ import {
   saveRuntimeConfig,
   verifyAdminPassword,
 } from '@/lib/settings'
+import { isDeviceApproved } from '@/lib/admin-devices'
+
+async function requireApprovedAdmin(
+  password: string | null | undefined,
+  deviceId: string | null | undefined
+) {
+  if (!(await verifyAdminPassword(password))) {
+    return { ok: false as const, status: 401, error: 'No autorizado' }
+  }
+  if (!(await isDeviceApproved(deviceId))) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: 'Dispositivo no aprobado (pendiente o rechazado)',
+      code: 'DEVICE_PENDING',
+    }
+  }
+  return { ok: true as const }
+}
 
 export async function GET(request: NextRequest) {
   const password =
     request.headers.get('x-admin-password') ||
     request.nextUrl.searchParams.get('password')
+  const deviceId =
+    request.headers.get('x-admin-device-id') ||
+    request.nextUrl.searchParams.get('deviceId')
 
-  if (!(await verifyAdminPassword(password))) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  const auth = await requireApprovedAdmin(password, deviceId)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: auth.error, code: auth.code },
+      { status: auth.status }
+    )
   }
 
   const cfg = await getRuntimeConfig()
-  // Admin autenticado: incluye PIN (no usar publicJukeboxConfig aquí)
   return NextResponse.json({
     config: cfg,
     source: 'runtime',
@@ -28,15 +52,25 @@ export async function GET(request: NextRequest) {
 }
 
 export async function PUT(request: NextRequest) {
-  let body: { password?: string; config?: Partial<RuntimeJukeboxConfig> }
+  let body: {
+    password?: string
+    deviceId?: string
+    config?: Partial<RuntimeJukeboxConfig>
+  }
   try {
     body = await request.json()
   } catch {
     return NextResponse.json({ error: 'JSON inválido' }, { status: 400 })
   }
 
-  if (!(await verifyAdminPassword(body.password))) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  const deviceId =
+    body.deviceId || request.headers.get('x-admin-device-id') || undefined
+  const auth = await requireApprovedAdmin(body.password, deviceId)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: auth.error, code: auth.code },
+      { status: auth.status }
+    )
   }
 
   if (!body.config || typeof body.config !== 'object') {

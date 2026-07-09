@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@supabase/supabase-js'
 import { verifyAdminPassword } from '@/lib/settings'
+import { isDeviceApproved } from '@/lib/admin-devices'
 
 function getSupabase() {
   const url = process.env.NEXT_PUBLIC_SUPABASE_URL
@@ -9,14 +10,36 @@ function getSupabase() {
   return createClient(url, key)
 }
 
-/** GET ?password= or header x-admin-password · ?slug=natmusicqr */
-export async function GET(request: NextRequest) {
-  const password =
+async function requireAdmin(request: NextRequest, password?: string | null) {
+  const pwd =
+    password ||
     request.headers.get('x-admin-password') ||
     request.nextUrl.searchParams.get('password')
+  const deviceId =
+    request.headers.get('x-admin-device-id') ||
+    request.nextUrl.searchParams.get('deviceId')
+  if (!(await verifyAdminPassword(pwd))) {
+    return { ok: false as const, status: 401, error: 'No autorizado' }
+  }
+  if (!(await isDeviceApproved(deviceId))) {
+    return {
+      ok: false as const,
+      status: 403,
+      error: 'Dispositivo no aprobado',
+      code: 'DEVICE_PENDING',
+    }
+  }
+  return { ok: true as const }
+}
 
-  if (!(await verifyAdminPassword(password))) {
-    return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+/** GET ?password= or header x-admin-password · ?slug=natmusicqr */
+export async function GET(request: NextRequest) {
+  const auth = await requireAdmin(request)
+  if (!auth.ok) {
+    return NextResponse.json(
+      { error: auth.error, code: auth.code },
+      { status: auth.status }
+    )
   }
 
   const slug =
@@ -62,16 +85,27 @@ export async function DELETE(request: NextRequest) {
   let videoId =
     request.nextUrl.searchParams.get('videoId')?.trim() || null
 
+  let deviceId =
+    request.headers.get('x-admin-device-id') ||
+    request.nextUrl.searchParams.get('deviceId')
+
   try {
     const body = await request.json()
     if (body?.password) password = body.password
     if (body?.videoId) videoId = String(body.videoId).trim()
+    if (body?.deviceId) deviceId = String(body.deviceId).trim()
   } catch {
     /* query params only */
   }
 
   if (!(await verifyAdminPassword(password))) {
     return NextResponse.json({ error: 'No autorizado' }, { status: 401 })
+  }
+  if (!(await isDeviceApproved(deviceId))) {
+    return NextResponse.json(
+      { error: 'Dispositivo no aprobado', code: 'DEVICE_PENDING' },
+      { status: 403 }
+    )
   }
 
   if (!videoId) {

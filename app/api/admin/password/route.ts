@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { changeAdminPassword, verifyAdminPassword } from '@/lib/settings'
+import { isDeviceApproved } from '@/lib/admin-devices'
 
 /** Cambiar contraseña del admin (se guarda en app_settings). */
 export async function PUT(request: NextRequest) {
@@ -7,6 +8,7 @@ export async function PUT(request: NextRequest) {
     currentPassword?: string
     newPassword?: string
     confirmPassword?: string
+    deviceId?: string
   }
   try {
     body = await request.json()
@@ -17,11 +19,19 @@ export async function PUT(request: NextRequest) {
   const current = body.currentPassword?.trim() ?? ''
   const next = body.newPassword?.trim() ?? ''
   const confirm = body.confirmPassword?.trim() ?? ''
+  const deviceId =
+    body.deviceId || request.headers.get('x-admin-device-id') || undefined
 
   if (!(await verifyAdminPassword(current))) {
     return NextResponse.json(
       { error: 'Contraseña actual incorrecta' },
       { status: 401 }
+    )
+  }
+  if (!(await isDeviceApproved(deviceId))) {
+    return NextResponse.json(
+      { error: 'Dispositivo no aprobado', code: 'DEVICE_PENDING' },
+      { status: 403 }
     )
   }
 

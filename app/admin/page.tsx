@@ -5,9 +5,45 @@ import Link from 'next/link'
 import type { RuntimeJukeboxConfig } from '@/config/jukebox.config'
 
 const STORAGE_KEY = 'natmusicqr:admin-password'
+const DEVICE_KEY = 'natmusicqr:admin-device-id'
 
 /** Sube este número en cada release para verificar el deploy en Vercel */
-export const ADMIN_UI_VERSION = '2.2.0'
+export const ADMIN_UI_VERSION = '2.3.0'
+
+type AdminDeviceRow = {
+  id: string
+  label: string
+  status: 'pending' | 'approved' | 'rejected'
+  createdAt: string
+  lastSeenAt: string
+  isOwner?: boolean
+}
+
+function getOrCreateAdminDeviceId(): string {
+  if (typeof window === 'undefined') return ''
+  try {
+    const existing = localStorage.getItem(DEVICE_KEY)
+    if (existing && existing.length >= 8) return existing
+    const id =
+      typeof crypto !== 'undefined' && 'randomUUID' in crypto
+        ? crypto.randomUUID()
+        : `adm-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`
+    localStorage.setItem(DEVICE_KEY, id)
+    return id
+  } catch {
+    return `adm-${Date.now()}`
+  }
+}
+
+function deviceLabel(): string {
+  if (typeof navigator === 'undefined') return 'Dispositivo'
+  const ua = navigator.userAgent
+  if (/iPhone|iPad/i.test(ua)) return 'iPhone/iPad'
+  if (/Android/i.test(ua)) return 'Android'
+  if (/Mac/i.test(ua)) return 'Mac'
+  if (/Windows/i.test(ua)) return 'Windows'
+  return 'Navegador'
+}
 
 const emptyConfig: RuntimeJukeboxConfig = {
   maxDurationSeconds: 300,
@@ -110,6 +146,9 @@ const cardClass =
 export default function AdminPage() {
   const [password, setPassword] = useState('')
   const [authed, setAuthed] = useState(false)
+  const [pending, setPending] = useState(false)
+  const [deviceId, setDeviceId] = useState('')
+  const [devices, setDevices] = useState<AdminDeviceRow[]>([])
   const [config, setConfig] = useState<RuntimeJukeboxConfig>(emptyConfig)
   const [loading, setLoading] = useState(false)
   const [saving, setSaving] = useState(false)
@@ -134,57 +173,129 @@ export default function AdminPage() {
   const [libraryLoading, setLibraryLoading] = useState(false)
   const [libraryFilter, setLibraryFilter] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deviceBusy, setDeviceBusy] = useState<string | null>(null)
+
+  const adminHeaders = useCallback(
+    (pwd: string) => ({
+      'x-admin-password': pwd,
+      'x-admin-device-id': deviceId || getOrCreateAdminDeviceId(),
+    }),
+    [deviceId]
+  )
+
+  const loadConfig = useCallback(
+    async (pwd: string) => {
+      setLoading(true)
+      setError(null)
+      try {
+        const did = deviceId || getOrCreateAdminDeviceId()
+        const res = await fetch('/api/admin/settings', {
+          headers: {
+            'x-admin-password': pwd,
+            'x-admin-device-id': did,
+          },
+        })
+        const data = await res.json()
+        if (!res.ok) {
+          setAuthed(false)
+          if (data.code === 'DEVICE_PENDING') {
+            setPending(true)
+            setError(null)
+          } else {
+            setPending(false)
+            setError(data.error || 'No autorizado')
+            sessionStorage.removeItem(STORAGE_KEY)
+          }
+          return
+        }
+        setConfig({
+          ...emptyConfig,
+          ...data.config,
+          access: {
+            ...emptyConfig.access,
+            ...data.config?.access,
+            pin: data.config?.access?.pin ?? emptyConfig.access.pin,
+          },
+          autoplayMusic: {
+            ...emptyConfig.autoplayMusic,
+            ...data.config?.autoplayMusic,
+          },
+          voting: {
+            ...emptyConfig.voting,
+            ...data.config?.voting,
+          },
+        })
+        setAuthed(true)
+        setPending(false)
+        sessionStorage.setItem(STORAGE_KEY, pwd)
+        setMessage(null)
+        // cargar lista de dispositivos
+        void fetch('/api/admin/devices', {
+          headers: {
+            'x-admin-password': pwd,
+            'x-admin-device-id': did,
+          },
+        })
+          .then((r) => r.json())
+          .then((d) => {
+            if (d.devices) setDevices(d.devices as AdminDeviceRow[])
+          })
+          .catch(() => null)
+      } catch {
+        setError('No se pudo conectar')
+        setAuthed(false)
+      } finally {
+        setLoading(false)
+      }
+    },
+    [deviceId]
+  )
 
   useEffect(() => {
-    if (typeof window !== 'undefined') setBaseUrl(window.location.origin)
+    if (typeof window !== 'undefined') {
+      setBaseUrl(window.location.origin)
+      setDeviceId(getOrCreateAdminDeviceId())
+    }
     const saved = sessionStorage.getItem(STORAGE_KEY)
     if (saved) {
       setPassword(saved)
-      void loadConfig(saved)
     }
   }, [])
 
-  const loadConfig = useCallback(async (pwd: string) => {
-    setLoading(true)
-    setError(null)
-    try {
-      const res = await fetch('/api/admin/settings', {
-        headers: { 'x-admin-password': pwd },
-      })
-      const data = await res.json()
-      if (!res.ok) {
-        setAuthed(false)
-        setError(data.error || 'No autorizado')
-        sessionStorage.removeItem(STORAGE_KEY)
-        return
-      }
-      setConfig({
-        ...emptyConfig,
-        ...data.config,
-        access: {
-          ...emptyConfig.access,
-          ...data.config?.access,
-          pin: data.config?.access?.pin ?? emptyConfig.access.pin,
-        },
-        autoplayMusic: {
-          ...emptyConfig.autoplayMusic,
-          ...data.config?.autoplayMusic,
-        },
-        voting: {
-          ...emptyConfig.voting,
-          ...data.config?.voting,
-        },
-      })
-      setAuthed(true)
-      sessionStorage.setItem(STORAGE_KEY, pwd)
-      setMessage(null)
-    } catch {
-      setError('No se pudo conectar')
-      setAuthed(false)
-    } finally {
-      setLoading(false)
+  // Reintentar carga cuando ya tenemos deviceId + password guardado
+  useEffect(() => {
+    if (!deviceId) return
+    const saved = sessionStorage.getItem(STORAGE_KEY)
+    if (saved && !authed && !pending) {
+      void loadConfig(saved)
     }
-  }, [])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deviceId])
+
+  // Polling si está pendiente de aprobación
+  useEffect(() => {
+    if (!pending || !password || !deviceId) return
+    const t = window.setInterval(async () => {
+      try {
+        const res = await fetch(
+          `/api/admin/session?password=${encodeURIComponent(password)}&deviceId=${encodeURIComponent(deviceId)}`,
+          { cache: 'no-store' }
+        )
+        const data = await res.json()
+        if (data.status === 'approved') {
+          setPending(false)
+          await loadConfig(password)
+        } else if (data.status === 'rejected') {
+          setPending(false)
+          setError('Este dispositivo fue rechazado')
+          sessionStorage.removeItem(STORAGE_KEY)
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 3000)
+    return () => window.clearInterval(t)
+  }, [pending, password, deviceId, loadConfig])
 
   const tableLinks = useMemo(() => {
     const origin = (baseUrl || '').replace(/\/$/, '')
@@ -200,7 +311,76 @@ export default function AdminPage() {
 
   async function handleLogin(e: React.FormEvent) {
     e.preventDefault()
-    await loadConfig(password.trim())
+    setLoading(true)
+    setError(null)
+    setPending(false)
+    const pwd = password.trim()
+    const did = deviceId || getOrCreateAdminDeviceId()
+    try {
+      const res = await fetch('/api/admin/session', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password: pwd,
+          deviceId: did,
+          label: deviceLabel(),
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'No autorizado')
+        setAuthed(false)
+        return
+      }
+      if (data.status === 'pending') {
+        setPending(true)
+        setAuthed(false)
+        sessionStorage.setItem(STORAGE_KEY, pwd)
+        setMessage(null)
+        setError(null)
+        return
+      }
+      if (data.status === 'approved') {
+        if (data.devices) setDevices(data.devices as AdminDeviceRow[])
+        await loadConfig(pwd)
+      }
+    } catch {
+      setError('No se pudo conectar')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  async function handleDeviceAction(
+    targetId: string,
+    status: 'approved' | 'rejected'
+  ) {
+    setDeviceBusy(targetId)
+    try {
+      const res = await fetch('/api/admin/devices', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          password,
+          deviceId,
+          targetId,
+          status,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'No se pudo actualizar')
+        return
+      }
+      if (data.devices) setDevices(data.devices as AdminDeviceRow[])
+      setMessage(
+        status === 'approved' ? 'Dispositivo aceptado' : 'Dispositivo rechazado'
+      )
+    } catch {
+      setError('Error de red')
+    } finally {
+      setDeviceBusy(null)
+    }
   }
 
   async function handleSave(e?: React.FormEvent) {
@@ -223,8 +403,11 @@ export default function AdminPage() {
     try {
       const res = await fetch('/api/admin/settings', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ password, config: payload }),
+        headers: {
+          'Content-Type': 'application/json',
+          ...adminHeaders(password),
+        },
+        body: JSON.stringify({ password, deviceId, config: payload }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -260,10 +443,12 @@ export default function AdminPage() {
   function logout() {
     sessionStorage.removeItem(STORAGE_KEY)
     setAuthed(false)
+    setPending(false)
     setPassword('')
     setCurrentPwd('')
     setNewPwd('')
     setConfirmPwd('')
+    setDevices([])
   }
 
   async function handleChangePassword(e: React.FormEvent) {
@@ -274,11 +459,15 @@ export default function AdminPage() {
     try {
       const res = await fetch('/api/admin/password', {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          ...adminHeaders(password),
+        },
         body: JSON.stringify({
           currentPassword: currentPwd || password,
           newPassword: newPwd,
           confirmPassword: confirmPwd,
+          deviceId,
         }),
       })
       const data = await res.json()
@@ -320,9 +509,15 @@ export default function AdminPage() {
     async (pwd: string, slug: string) => {
       setLibraryLoading(true)
       try {
+        const did = deviceId || getOrCreateAdminDeviceId()
         const res = await fetch(
-          `/api/admin/videos?slug=${encodeURIComponent(slug)}`,
-          { headers: { 'x-admin-password': pwd } }
+          `/api/admin/videos?slug=${encodeURIComponent(slug)}&deviceId=${encodeURIComponent(did)}`,
+          {
+            headers: {
+              'x-admin-password': pwd,
+              'x-admin-device-id': did,
+            },
+          }
         )
         const data = await res.json()
         if (!res.ok) {
@@ -336,7 +531,7 @@ export default function AdminPage() {
         setLibraryLoading(false)
       }
     },
-    []
+    [deviceId]
   )
 
   useEffect(() => {
@@ -368,9 +563,9 @@ export default function AdminPage() {
         method: 'DELETE',
         headers: {
           'Content-Type': 'application/json',
-          'x-admin-password': password,
+          ...adminHeaders(password),
         },
-        body: JSON.stringify({ password, videoId: video.id }),
+        body: JSON.stringify({ password, deviceId, videoId: video.id }),
       })
       const data = await res.json()
       if (!res.ok) {
@@ -388,6 +583,43 @@ export default function AdminPage() {
     } finally {
       setDeletingId(null)
     }
+  }
+
+  /* ——— Pendiente de aprobación ——— */
+  if (pending && !authed) {
+    return (
+      <div className="relative min-h-screen overflow-hidden bg-[#07080a] font-[family-name:var(--font-geist-sans)] text-zinc-100">
+        <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(ellipse_at_top,_rgba(245,158,11,0.12),_transparent_55%)]" />
+        <div className="relative flex min-h-screen items-center justify-center p-5">
+          <div className="w-full max-w-[400px] rounded-2xl border border-amber-800/50 bg-zinc-900/60 p-7 shadow-2xl backdrop-blur-xl text-center">
+            <p className="text-3xl" aria-hidden>
+              ⏳
+            </p>
+            <h1 className="mt-3 text-xl font-semibold text-white">
+              Acceso pendiente
+            </h1>
+            <p className="mt-2 text-sm leading-relaxed text-zinc-400">
+              La contraseña es correcta, pero este dispositivo debe ser{' '}
+              <strong className="text-amber-200">aceptado</strong> por un
+              administrador que ya esté dentro del panel (pestaña Seguridad).
+            </p>
+            <p className="mt-4 text-xs text-zinc-500">
+              Esperando aprobación… se actualiza solo.
+            </p>
+            <div className="mt-4 h-1 overflow-hidden rounded-full bg-zinc-800">
+              <div className="h-full w-1/3 animate-pulse rounded-full bg-amber-500" />
+            </div>
+            <button
+              type="button"
+              onClick={logout}
+              className="mt-6 text-xs text-zinc-500 hover:text-zinc-300"
+            >
+              Cancelar
+            </button>
+          </div>
+        </div>
+      </div>
+    )
   }
 
   /* ——— Login ——— */
@@ -413,7 +645,7 @@ export default function AdminPage() {
                 Panel de control
               </h1>
               <p className="mt-1.5 text-sm leading-relaxed text-zinc-500">
-                Configuración del jukebox, QR y seguridad
+                Contraseña + aprobación de dispositivo
               </p>
             </div>
             <Field label="Contraseña">
@@ -436,6 +668,10 @@ export default function AdminPage() {
             >
               {loading ? 'Verificando…' : 'Entrar'}
             </button>
+            <p className="mt-3 text-center text-[11px] text-zinc-600">
+              El primer acceso queda como dueño. Los siguientes quedan pendientes
+              hasta que aceptes el dispositivo.
+            </p>
             <Link
               href="/"
               className="mt-4 block text-center text-xs text-zinc-600 transition hover:text-zinc-400"
@@ -1075,6 +1311,93 @@ export default function AdminPage() {
                 {pwdSaving ? 'Actualizando…' : 'Cambiar contraseña'}
               </button>
             </form>
+
+            <div className={`${cardClass} space-y-3`}>
+              <SectionHead
+                title="Dispositivos admin"
+                desc="Quién puede entrar al panel. Los pendientes necesitan tu aceptación."
+              />
+              {devices.filter((d) => d.status === 'pending').length > 0 && (
+                <p className="rounded-lg border border-amber-800/50 bg-amber-950/30 px-3 py-2 text-xs text-amber-100">
+                  ⏳ Hay{' '}
+                  {devices.filter((d) => d.status === 'pending').length}{' '}
+                  dispositivo(s) pendiente(s) de aprobación
+                </p>
+              )}
+              <div className="space-y-2">
+                {devices.length === 0 ? (
+                  <p className="text-sm text-zinc-500">Ningún dispositivo aún</p>
+                ) : (
+                  devices.map((d) => (
+                    <div
+                      key={d.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-zinc-800 bg-zinc-950/50 px-3 py-2.5"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-zinc-100">
+                          {d.label}
+                          {d.isOwner ? (
+                            <span className="ml-2 text-[10px] font-bold uppercase text-emerald-400">
+                              dueño
+                            </span>
+                          ) : null}
+                          {d.id === deviceId ? (
+                            <span className="ml-2 text-[10px] text-sky-400">
+                              este equipo
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="text-[11px] text-zinc-500">
+                          {d.status === 'pending'
+                            ? '⏳ Pendiente'
+                            : d.status === 'approved'
+                              ? '✅ Aprobado'
+                              : '🚫 Rechazado'}
+                          {' · '}
+                          {new Date(d.createdAt).toLocaleString()}
+                        </p>
+                      </div>
+                      {d.status === 'pending' && (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            disabled={deviceBusy === d.id}
+                            onClick={() =>
+                              void handleDeviceAction(d.id, 'approved')
+                            }
+                            className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-bold text-white hover:bg-emerald-500 disabled:opacity-50"
+                          >
+                            Aceptar
+                          </button>
+                          <button
+                            type="button"
+                            disabled={deviceBusy === d.id}
+                            onClick={() =>
+                              void handleDeviceAction(d.id, 'rejected')
+                            }
+                            className="rounded-lg border border-red-800 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-950/50 disabled:opacity-50"
+                          >
+                            Rechazar
+                          </button>
+                        </div>
+                      )}
+                      {d.status === 'approved' && !d.isOwner && d.id !== deviceId && (
+                        <button
+                          type="button"
+                          disabled={deviceBusy === d.id}
+                          onClick={() =>
+                            void handleDeviceAction(d.id, 'rejected')
+                          }
+                          className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-red-800 hover:text-red-300"
+                        >
+                          Revocar
+                        </button>
+                      )}
+                    </div>
+                  ))
+                )}
+              </div>
+            </div>
           </section>
         )}
 
