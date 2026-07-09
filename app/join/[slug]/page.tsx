@@ -45,8 +45,8 @@ type SearchItem = {
   thumbnailUrl: string | null
 }
 
-/** v2.4.1 — comentarios arriba + feed visible en join */
-export const JOIN_UI_VERSION = '2.4.1'
+/** v2.4.4 — feed TV + super i9 robustos */
+export const JOIN_UI_VERSION = '2.4.4'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -295,7 +295,9 @@ export default function JoinPage() {
     kind: 'comment' | 'like' | 'dislike',
     body?: string
   ) {
-    if (!slug || !session || !deviceId) return { ok: false as const, error: 'Sin sesión' }
+    if (!slug || !session) return { ok: false as const, error: 'Sin sesión' }
+    const did = deviceId || getOrCreateDeviceId()
+    if (!did) return { ok: false as const, error: 'Sin deviceId' }
     try {
       const res = await fetch('/api/live/feed', {
         method: 'POST',
@@ -304,9 +306,9 @@ export default function JoinPage() {
           venueSlug: slug,
           kind,
           body,
-          displayName: session.displayName || session.tableName,
+          displayName: session.displayName || session.tableName || 'Mesa',
           tableName: session.tableName,
-          deviceId,
+          deviceId: did,
           queueItemId: playing?.id,
           accessPin: session.accessPin || pinInput.trim() || undefined,
         }),
@@ -319,7 +321,7 @@ export default function JoinPage() {
           code: data.code as string | undefined,
         }
       }
-      return { ok: true as const }
+      return { ok: true as const, item: data.item }
     } catch {
       return { ok: false as const, error: 'Error de red' }
     }
@@ -455,7 +457,9 @@ export default function JoinPage() {
   ) {
     if (!slug || !session || superBusy) return
     if (!isSuperSession(session)) {
-      setMessage('Sin super poderes en esta mesa (usa mesa o nombre i9)')
+      setMessage(
+        'Sin super poderes. En Mesa o Nombre escribe i9 y pulsa Cambiar mesa → entrar de nuevo'
+      )
       return
     }
 
@@ -466,7 +470,10 @@ export default function JoinPage() {
       if (!ok) return
     }
 
-    if (action === 'cancel_direct' && !playing) {
+    if (
+      (action === 'cancel_direct' || action === 'next') &&
+      !playing
+    ) {
       setMessage('No hay música en reproducción')
       return
     }
@@ -474,19 +481,13 @@ export default function JoinPage() {
     setSuperBusy(action === 'remove' && queueItemId ? `rm-${queueItemId}` : action)
     setMessage(null)
     try {
-      // Enviar label completo (mesa · nombre) para que la API reconozca i9
-      const superLabel =
-        formatTableLabel(session) ||
-        session.tableName ||
-        session.displayName ||
-        'i9'
-
       const res = await fetch('/api/queue/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           venueSlug: slug,
-          tableName: superLabel,
+          tableName: session.tableName,
+          displayName: session.displayName,
           action,
           queueItemId,
         }),
@@ -499,18 +500,16 @@ export default function JoinPage() {
         )
         return
       }
-      setMessage(data.message || 'Listo')
-      // Actualizar cola local al instante si la API devuelve snapshot
+      setMessage(data.message || 'Listo ⚡')
       if (data.queue?.items && Array.isArray(data.queue.items)) {
         setQueue(data.queue.items as QueueItem[])
       } else if (venue) {
         await loadQueue(venue.id)
       }
-      // Refresco extra por si la TV/Realtime tarda
       if (venue) {
         window.setTimeout(() => {
           void loadQueue(venue.id)
-        }, 800)
+        }, 600)
       }
     } catch {
       setMessage('Error de red en super poderes')

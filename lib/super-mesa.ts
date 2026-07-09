@@ -10,12 +10,15 @@ function tokenIsSuper(raw: string | null | undefined): boolean {
   const t = raw.trim().toLowerCase()
   if (!t) return false
   if (t === SUPER_MESA_NAME) return true
-  // "Mesa i9" / "mesa-i9"
+  // "Mesa i9" / "mesa-i9" / "mesa i9"
   const stripped = t
     .replace(/^mesa[\s_-]+/i, '')
     .replace(/[\s_-]+/g, '')
     .trim()
-  return stripped === SUPER_MESA_NAME
+  if (stripped === SUPER_MESA_NAME) return true
+  // contiene i9 como token (ej. "admin i9")
+  if (/(^|[\s._-])i9($|[\s._-])/.test(t)) return true
+  return false
 }
 
 /**

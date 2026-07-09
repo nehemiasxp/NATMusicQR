@@ -9,8 +9,8 @@ import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 1500
-/** Versión player — YouTube boot estable */
-export const PLAYER_UI_VERSION = '2.4.3'
+/** Versión player — feed TV + super control */
+export const PLAYER_UI_VERSION = '2.4.4'
 
 /** Fullscreen API con prefijos webkit (Safari) sin romper tipos */
 function getFullscreenElement(): Element | null {

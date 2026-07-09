@@ -16,17 +16,11 @@ type Action = 'next' | 'cancel_direct' | 'cancel_all' | 'remove'
 type Body = {
   venueSlug?: string
   tableName?: string
+  displayName?: string
   action?: Action
   queueItemId?: string
 }
 
-/**
- * Super poderes de mesa i9:
- * - next: salta la actual → siguiente (con autoplay si está activo)
- * - cancel_direct: cancela la que suena (promueve cola, sin autoplay)
- * - cancel_all: vacía playing + queued
- * - remove: quita un item; si era playing, promueve siguiente
- */
 export async function POST(request: NextRequest) {
   let body: Body
   try {
@@ -37,35 +31,41 @@ export async function POST(request: NextRequest) {
 
   const venueSlug = body.venueSlug?.trim()
   const tableName = body.tableName?.trim() || ''
+  const displayName = body.displayName?.trim() || ''
   const action = body.action
   const queueItemId = body.queueItemId?.trim()
 
   if (!venueSlug) {
     return NextResponse.json({ error: 'Falta venueSlug' }, { status: 400 })
   }
-  if (!isSuperMesa(tableName)) {
+
+  // Acepta i9 en mesa, nombre, o label combinado
+  const superOk =
+    isSuperMesa(tableName) ||
+    isSuperMesa(displayName) ||
+    isSuperMesa(
+      displayName ? `${tableName} · ${displayName}` : tableName
+    )
+
+  if (!superOk) {
     return NextResponse.json(
       {
         error:
-          'Sin super poderes. Entra con mesa o nombre "i9" y vuelve a intentarlo.',
+          'Sin super poderes. En mesa o nombre pon exactamente: i9 (luego recarga).',
         code: 'NOT_SUPER',
+        got: { tableName, displayName },
       },
       { status: 403 }
     )
   }
+
   if (
     action !== 'next' &&
     action !== 'cancel_direct' &&
     action !== 'cancel_all' &&
     action !== 'remove'
   ) {
-    return NextResponse.json(
-      {
-        error:
-          'Acción inválida. Usa: next | cancel_direct | cancel_all | remove',
-      },
-      { status: 400 }
-    )
+    return NextResponse.json({ error: 'Acción inválida' }, { status: 400 })
   }
 
   const supabase = getSupabase()
@@ -88,21 +88,17 @@ export async function POST(request: NextRequest) {
     if (action === 'remove') {
       if (!queueItemId) {
         return NextResponse.json(
-          { error: 'Falta queueItemId para eliminar' },
+          { error: 'Falta queueItemId' },
           { status: 400 }
         )
       }
-
-      const { data: item, error: findErr } = await supabase
+      const { data: item } = await supabase
         .from('queue_items')
         .select('id, status')
         .eq('id', queueItemId)
         .eq('venue_id', venue.id)
         .maybeSingle()
 
-      if (findErr) {
-        return NextResponse.json({ error: findErr.message }, { status: 500 })
-      }
       if (!item || (item.status !== 'queued' && item.status !== 'playing')) {
         return NextResponse.json(
           { error: 'Esa canción ya no está en la cola' },
@@ -111,8 +107,7 @@ export async function POST(request: NextRequest) {
       }
 
       const wasPlaying = item.status === 'playing'
-      await forceStatus(supabase, item.id, venue.id, 'skipped')
-
+      await skipIds(supabase, venue.id, [item.id])
       if (wasPlaying) {
         await promoteNext(
           supabase,
@@ -120,70 +115,42 @@ export async function POST(request: NextRequest) {
           Boolean(cfg.autoplayMusic?.enabled)
         )
       }
-
       const snapshot = await activeSnapshot(supabase, venue.id)
       return NextResponse.json({
         ok: true,
         action: 'remove',
-        skippedId: item.id,
-        playingId: snapshot.playing?.id ?? null,
         message: wasPlaying
-          ? snapshot.playing
-            ? 'Eliminada · ahora suena la siguiente'
-            : 'Eliminada · no hay más en cola'
-          : 'Canción eliminada de la cola',
+          ? 'Eliminada · siguiente'
+          : 'Eliminada de la cola',
         queue: snapshot,
       })
     }
 
     if (action === 'cancel_all') {
-      const { data: before, error: listErr } = await supabase
+      const { data: active } = await supabase
         .from('queue_items')
         .select('id')
         .eq('venue_id', venue.id)
         .in('status', ['queued', 'playing'])
 
-      if (listErr) {
-        return NextResponse.json({ error: listErr.message }, { status: 500 })
-      }
-
-      const pending = before ?? []
-      if (pending.length === 0) {
+      const ids = (active ?? []).map((r) => r.id)
+      if (ids.length === 0) {
         return NextResponse.json({
           ok: true,
           action: 'cancel_all',
           cleared: 0,
-          playingId: null,
           message: 'La cola ya estaba vacía',
           queue: { items: [], playing: null },
         })
       }
 
-      const { data: updated, error: clearError } = await supabase
-        .from('queue_items')
-        .update({ status: 'skipped' })
-        .eq('venue_id', venue.id)
-        .in('status', ['queued', 'playing'])
-        .select('id')
-
-      if (clearError) {
-        return NextResponse.json({ error: clearError.message }, { status: 500 })
-      }
-      if (!updated || updated.length === 0) {
-        throw new Error(
-          'No se pudo vaciar la cola (0 filas). Revisa políticas RLS de queue_items (UPDATE).'
-        )
-      }
-
-      // No autoplay tras cancelar todo: silencio hasta el próximo pedido
-      const snapshot = await activeSnapshot(supabase, venue.id)
+      const n = await skipIds(supabase, venue.id, ids)
       return NextResponse.json({
         ok: true,
         action: 'cancel_all',
-        cleared: updated.length,
-        playingId: null,
-        message: `Cola vaciada (${updated.length} cancelada${updated.length === 1 ? '' : 's'})`,
-        queue: snapshot,
+        cleared: n,
+        message: `Cola vaciada (${n})`,
+        queue: { items: [], playing: null },
       })
     }
 
@@ -196,9 +163,7 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    await forceStatus(supabase, playing.id, venue.id, 'skipped')
-
-    // next: puede autoplay; cancel_direct: solo cola de pedidos
+    await skipIds(supabase, venue.id, [playing.id])
     const allowAutoplay =
       action === 'next' ? Boolean(cfg.autoplayMusic?.enabled) : false
     const promoted = await promoteNext(supabase, venue.id, allowAutoplay)
@@ -213,7 +178,7 @@ export async function POST(request: NextRequest) {
       message:
         action === 'cancel_direct'
           ? promoted
-            ? 'Cancelada en reproducción · siguiente en cola'
+            ? 'Cancelada · siguiente en cola'
             : 'Música en reproducción cancelada'
           : promoted
             ? 'Siguiente canción en marcha'
@@ -221,14 +186,11 @@ export async function POST(request: NextRequest) {
       queue: snapshot,
     })
   } catch (e) {
-    const msg = e instanceof Error ? e.message : 'Error en control de cola'
-    const isRls = /RLS|row-level|0 filas|no se pudo actualizar/i.test(msg)
+    const msg = e instanceof Error ? e.message : 'Error en control'
     return NextResponse.json(
       {
         error: msg,
-        hint: isRls
-          ? 'Ejecuta supabase-rls-fix.sql o supabase-ONE-SHOT.sql en Supabase (política UPDATE en queue_items).'
-          : undefined,
+        hint: 'Si dice 0 filas: políticas RLS UPDATE en queue_items. Ejecuta supabase-rls-fix.sql',
       },
       { status: 500 }
     )
@@ -248,34 +210,23 @@ async function findPlaying(supabase: SupabaseClient, venueId: string) {
   return data?.[0] ?? null
 }
 
-/**
- * Marca status y verifica que el UPDATE aplicó (detecta RLS silencioso).
- */
-async function forceStatus(
+/** Marca skipped; no falla si ya estaban skipped */
+async function skipIds(
   supabase: SupabaseClient,
-  id: string,
   venueId: string,
-  status: 'skipped' | 'played' | 'playing' | 'queued'
-): Promise<boolean> {
+  ids: string[]
+): Promise<number> {
+  if (!ids.length) return 0
   const { data, error } = await supabase
     .from('queue_items')
-    .update({
-      status,
-      ...(status === 'playing' ? { played_at: new Date().toISOString() } : {}),
-    })
-    .eq('id', id)
+    .update({ status: 'skipped' })
     .eq('venue_id', venueId)
+    .in('id', ids)
+    .in('status', ['queued', 'playing'])
     .select('id')
 
-  if (error) {
-    throw new Error(error.message)
-  }
-  if (!data || data.length === 0) {
-    throw new Error(
-      'No se pudo actualizar la cola (0 filas). Revisa políticas RLS de queue_items (UPDATE).'
-    )
-  }
-  return true
+  if (error) throw new Error(error.message)
+  return data?.length ?? 0
 }
 
 async function promoteNext(
@@ -283,7 +234,6 @@ async function promoteNext(
   venueId: string,
   autoplayEnabled: boolean
 ): Promise<{ id: string } | null> {
-  // Evitar dos "playing" a la vez: si ya hay una, no promocionar
   const existing = await findPlaying(supabase, venueId)
   if (existing) return existing
 
@@ -298,19 +248,32 @@ async function promoteNext(
   if (error) throw new Error(error.message)
   const next = nextRows?.[0]
   if (next) {
-    await forceStatus(supabase, next.id, venueId, 'playing')
+    const { data, error: upErr } = await supabase
+      .from('queue_items')
+      .update({
+        status: 'playing',
+        played_at: new Date().toISOString(),
+      })
+      .eq('id', next.id)
+      .eq('status', 'queued')
+      .select('id')
+
+    if (upErr) throw new Error(upErr.message)
+    if (!data?.length) {
+      // carrera: otro proceso lo tomó
+      return (await findPlaying(supabase, venueId)) ?? next
+    }
     return next
   }
 
   if (!autoplayEnabled) return null
 
-  const { data: videos, error: vErr } = await supabase
+  const { data: videos } = await supabase
     .from('videos')
     .select('id, youtube_id')
     .eq('venue_id', venueId)
     .eq('is_active', true)
 
-  if (vErr) throw new Error(vErr.message)
   const withYt = (videos ?? []).filter((v) => v.youtube_id)
   if (!withYt.length) return null
 
@@ -342,7 +305,6 @@ async function activeSnapshot(supabase: SupabaseClient, venueId: string) {
   if (error) {
     return { items: [] as QueueItem[], playing: null as QueueItem | null }
   }
-
   const items = (data ?? []) as unknown as QueueItem[]
   const playing =
     items.find((i) => i.status === 'playing' && i.videos?.youtube_id) ?? null
