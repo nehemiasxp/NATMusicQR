@@ -9,8 +9,8 @@ import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 1500
-/** Versión player — fix hooks + fullscreen stage */
-export const PLAYER_UI_VERSION = '2.4.2'
+/** Versión player — YouTube boot estable */
+export const PLAYER_UI_VERSION = '2.4.3'
 
 /** Fullscreen API con prefijos webkit (Safari) sin romper tipos */
 function getFullscreenElement(): Element | null {
@@ -309,12 +309,21 @@ export default function PlayerPage() {
   const handlePlayerError = useCallback(
     (code: number) => {
       console.error('Error del reproductor YouTube:', code)
-      setPlayerNote(
-        `YouTube no pudo reproducir este video (código ${code}). Saltando…`
-      )
+      const hint =
+        code === 101 || code === 150
+          ? 'Video no embelleble'
+          : code === 100
+            ? 'Video no encontrado'
+            : code === 153
+              ? 'YouTube bloqueó embed (dominio/Referer)'
+              : `código ${code}`
+      setPlayerNote(`YouTube: ${hint}. Saltando…`)
+      // Solo saltar si hay algo que reproducir; evita bucle vacío
       window.setTimeout(() => {
-        void finishAdvance(false)
-      }, 1500)
+        if (playingItemRef.current) {
+          void finishAdvance(true)
+        }
+      }, 1800)
     },
     [finishAdvance]
   )

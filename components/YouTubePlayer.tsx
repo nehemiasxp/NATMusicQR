@@ -1,43 +1,27 @@
 'use client'
 
 /**
- * Player YouTube estilo playlist (Spotify-like):
- * - Un solo YT.Player / iframe durante toda la sesión de TV
- * - Cambio de canción con loadVideoById (NO destroy/remount)
- * - iOS/Safari: playsinline + mute inicial + onAutoplayBlocked
- * - Host DOM fuera del control de React (evita que el iframe se pise)
+ * YouTube IFrame API — un solo player (playlist style).
+ * - No se destruye al cambiar de canción (loadVideoById)
+ * - No se crea sin un videoId válido (evita errores de boot)
+ * - iOS: playsinline + mute inicial + botón de gesto
  *
- * Docs: https://developers.google.com/youtube/iframe_api_reference
+ * https://developers.google.com/youtube/iframe_api_reference
  */
 
 import { useEffect, useRef, useState } from 'react'
-import Script from 'next/script'
 
 declare global {
   interface Window {
     YT?: {
       Player: new (
         elementId: string | HTMLElement,
-        config: {
-          width?: string | number
-          height?: string | number
-          videoId?: string
-          host?: string
-          playerVars?: Record<string, string | number>
-          events?: {
-            onReady?: (event: { target: YTPlayer }) => void
-            onStateChange?: (event: { data: number; target: YTPlayer }) => void
-            onError?: (event: { data: number }) => void
-            onAutoplayBlocked?: (event: { target: YTPlayer }) => void
-          }
-        }
+        config: Record<string, unknown>
       ) => YTPlayer
-      PlayerState: {
-        UNSTARTED: number
+      PlayerState?: {
         ENDED: number
         PLAYING: number
         PAUSED: number
-        BUFFERING: number
         CUED: number
       }
     }
@@ -48,29 +32,20 @@ declare global {
 type YTPlayer = {
   destroy: () => void
   loadVideoById: (
-    videoIdOrOpts:
-      | string
-      | { videoId: string; startSeconds?: number; endSeconds?: number }
-  ) => void
-  cueVideoById: (
-    videoIdOrOpts:
-      | string
-      | { videoId: string; startSeconds?: number; endSeconds?: number }
+    opts: string | { videoId: string; startSeconds?: number }
   ) => void
   playVideo: () => void
   pauseVideo: () => void
   mute: () => void
   unMute: () => void
-  stopVideo: () => void
   getPlayerState: () => number
-  setVolume: (volume: number) => void
+  setVolume: (n: number) => void
   getVolume: () => number
   isMuted: () => boolean
   getVideoData?: () => { video_id?: string }
 }
 
 type Props = {
-  /** YouTube video id actual. null/'' = idle (player sigue montado). */
   videoId: string | null | undefined
   title?: string
   onEnded: () => void
@@ -78,7 +53,6 @@ type Props = {
   onError?: (code: number) => void
   fadeOutKey?: string | number | null
   fadeOutMs?: number
-  /** Siguiente id (referencia UI; el cambio real va por videoId) */
   nextVideoId?: string | null
 }
 
@@ -87,34 +61,60 @@ const YT_PLAYING = 1
 const YT_PAUSED = 2
 const YT_CUED = 5
 
-function loadYouTubeApi(): Promise<void> {
+let apiPromise: Promise<void> | null = null
+
+function ensureYouTubeApi(): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve()
   if (window.YT?.Player) return Promise.resolve()
+  if (apiPromise) return apiPromise
 
-  return new Promise((resolve) => {
-    const previous = window.onYouTubeIframeAPIReady
-    window.onYouTubeIframeAPIReady = () => {
-      previous?.()
-      resolve()
+  apiPromise = new Promise<void>((resolve) => {
+    const done = () => {
+      if (window.YT?.Player) resolve()
     }
 
-    const timer = window.setInterval(() => {
+    const prev = window.onYouTubeIframeAPIReady
+    window.onYouTubeIframeAPIReady = () => {
+      try {
+        prev?.()
+      } catch {
+        /* ignore */
+      }
+      done()
+    }
+
+    // Script ya en la página
+    if (!document.querySelector('script[src*="youtube.com/iframe_api"]')) {
+      const tag = document.createElement('script')
+      tag.src = 'https://www.youtube.com/iframe_api'
+      tag.async = true
+      document.head.appendChild(tag)
+    }
+
+    const t = window.setInterval(() => {
       if (window.YT?.Player) {
-        window.clearInterval(timer)
+        window.clearInterval(t)
         resolve()
       }
-    }, 40)
+    }, 50)
+
+    // Timeout duro: no colgar la UI
+    window.setTimeout(() => {
+      window.clearInterval(t)
+      if (window.YT?.Player) resolve()
+      else resolve() // el caller verá que no hay Player
+    }, 15000)
   })
+
+  return apiPromise
 }
 
-function readLoadedVideoId(player: YTPlayer): string | null {
+function readId(player: YTPlayer): string | null {
   try {
-    const data = player.getVideoData?.()
-    if (data?.video_id) return data.video_id
+    return player.getVideoData?.()?.video_id ?? null
   } catch {
-    /* ignore */
+    return null
   }
-  return null
 }
 
 export default function YouTubePlayer({
@@ -125,20 +125,20 @@ export default function YouTubePlayer({
   onError,
   fadeOutKey = null,
   fadeOutMs = 4500,
-  nextVideoId = null,
 }: Props) {
   const wrapRef = useRef<HTMLDivElement | null>(null)
+  const hostRef = useRef<HTMLDivElement | null>(null)
   const playerRef = useRef<YTPlayer | null>(null)
   const readyRef = useRef(false)
-  /** Tras PLAYING + unMute (gesto/sesión desbloqueada en iOS) */
-  const sessionUnlockedRef = useRef(false)
-  const desiredIdRef = useRef<string | null>(null)
-  const loadedIdRef = useRef<string | null>(null)
-  const ignoreEndedUntilRef = useRef(0)
+  const unlockedRef = useRef(false)
+  const desiredRef = useRef<string | null>(null)
+  const loadedRef = useRef<string | null>(null)
+  const ignoreEndedUntil = useRef(0)
   const finishedRef = useRef(false)
   const fadingRef = useRef(false)
-  const fadeRafRef = useRef<number | null>(null)
-  const lastFadeKeyRef = useRef<string | number | null>(null)
+  const fadeRaf = useRef<number | null>(null)
+  const lastFadeKey = useRef<string | number | null>(null)
+  const creatingRef = useRef(false)
 
   const onEndedRef = useRef(onEnded)
   const onFadeCompleteRef = useRef(onFadeComplete)
@@ -151,289 +151,275 @@ export default function YouTubePlayer({
   const [fading, setFading] = useState(false)
   const [fadeProgress, setFadeProgress] = useState(0)
   const [idle, setIdle] = useState(!videoId)
-  /** Dispara playOrLoad cuando el iframe ya está listo */
-  const [playerReady, setPlayerReady] = useState(false)
-  const [bootError, setBootError] = useState<string | null>(null)
+  const [status, setStatus] = useState<string | null>(null)
 
-  desiredIdRef.current = videoId?.trim() || null
+  desiredRef.current = videoId?.trim() || null
 
-  function cancelFadeLoop() {
-    if (fadeRafRef.current != null) {
-      cancelAnimationFrame(fadeRafRef.current)
-      fadeRafRef.current = null
+  function cancelFade() {
+    if (fadeRaf.current != null) {
+      cancelAnimationFrame(fadeRaf.current)
+      fadeRaf.current = null
     }
   }
 
-  function safeSetVolume(player: YTPlayer, vol: number) {
+  function restoreAudio(p: YTPlayer) {
     try {
-      player.setVolume(Math.max(0, Math.min(100, Math.round(vol))))
-    } catch {
-      /* ignore */
-    }
-  }
-
-  function restoreFullVolume(player: YTPlayer) {
-    try {
-      player.unMute()
-      player.setVolume(100)
-      sessionUnlockedRef.current = true
+      p.unMute()
+      p.setVolume(100)
+      unlockedRef.current = true
       setNeedsGesture(false)
     } catch {
-      /* iOS puede bloquear unMute hasta gesto */
+      /* iOS */
     }
   }
 
   function playOrLoad(id: string | null) {
-    const player = playerRef.current
-    if (!player || !readyRef.current) return
+    const p = playerRef.current
+    if (!p || !readyRef.current) return
 
-    cancelFadeLoop()
+    cancelFade()
     fadingRef.current = false
     finishedRef.current = false
     setFading(false)
     setFadeProgress(0)
-    lastFadeKeyRef.current = null
+    lastFadeKey.current = null
 
     if (!id) {
       setIdle(true)
       try {
-        player.pauseVideo()
-        player.mute()
+        p.pauseVideo()
+        p.mute()
       } catch {
         /* ignore */
       }
-      loadedIdRef.current = null
       return
     }
 
     setIdle(false)
-    const already =
-      loadedIdRef.current === id || readLoadedVideoId(player) === id
-    ignoreEndedUntilRef.current = Date.now() + 1200
+    setStatus(null)
+    ignoreEndedUntil.current = Date.now() + 1500
 
+    const same = loadedRef.current === id || readId(p) === id
     try {
-      if (already) {
-        if (sessionUnlockedRef.current) restoreFullVolume(player)
-        else player.mute()
-        player.playVideo()
+      if (same) {
+        if (unlockedRef.current) restoreAudio(p)
+        else p.mute()
+        p.playVideo()
         return
       }
 
-      // Misma sesión de media: loadVideoById (NO destroy, NO stopVideo)
-      if (sessionUnlockedRef.current) {
-        player.loadVideoById({ videoId: id, startSeconds: 0 })
+      if (unlockedRef.current) {
+        p.loadVideoById({ videoId: id, startSeconds: 0 })
         window.setTimeout(() => {
-          if (desiredIdRef.current === id && playerRef.current) {
-            restoreFullVolume(playerRef.current)
+          if (desiredRef.current === id && playerRef.current) {
+            restoreAudio(playerRef.current)
             try {
               playerRef.current.playVideo()
             } catch {
               /* ignore */
             }
           }
-        }, 250)
+        }, 200)
       } else {
-        player.mute()
-        player.loadVideoById({ videoId: id, startSeconds: 0 })
+        p.mute()
+        p.loadVideoById({ videoId: id, startSeconds: 0 })
         window.setTimeout(() => {
           try {
-            player.playVideo()
+            p.playVideo()
           } catch {
             setNeedsGesture(true)
           }
-        }, 80)
+        }, 100)
       }
-      loadedIdRef.current = id
-    } catch {
+      loadedRef.current = id
+    } catch (e) {
+      setStatus(e instanceof Error ? e.message : 'Error al cargar video')
       setNeedsGesture(true)
     }
   }
 
-  function startFadeOut(durationMs: number) {
-    const player = playerRef.current
-    if (!player || fadingRef.current || finishedRef.current) return
-
+  function startFadeOut(ms: number) {
+    const p = playerRef.current
+    if (!p || fadingRef.current || finishedRef.current) return
     fadingRef.current = true
     setFading(true)
     setFadeProgress(0)
-    cancelFadeLoop()
+    cancelFade()
 
     try {
-      player.unMute()
-      player.playVideo()
+      p.unMute()
+      p.playVideo()
     } catch {
       /* ignore */
     }
 
     let startVol = 100
     try {
-      const g = player.getVolume()
-      if (typeof g === 'number' && !Number.isNaN(g) && g > 0) startVol = g
-      player.setVolume(startVol)
+      const g = p.getVolume()
+      if (typeof g === 'number' && g > 0) startVol = g
     } catch {
       startVol = 100
     }
 
     const t0 = performance.now()
-
     const tick = (now: number) => {
       if (finishedRef.current) return
-      const elapsed = now - t0
-      const t = Math.min(1, elapsed / durationMs)
+      const t = Math.min(1, (now - t0) / ms)
       const eased = t * t * t
-      safeSetVolume(player, startVol * (1 - eased))
-      setFadeProgress(Math.round(t * 100))
-
-      if (t < 1) {
-        fadeRafRef.current = requestAnimationFrame(tick)
-        return
-      }
-
-      safeSetVolume(player, 0)
       try {
-        player.mute()
-        player.pauseVideo()
+        p.setVolume(Math.round(startVol * (1 - eased)))
       } catch {
         /* ignore */
       }
-
+      setFadeProgress(Math.round(t * 100))
+      if (t < 1) {
+        fadeRaf.current = requestAnimationFrame(tick)
+        return
+      }
+      try {
+        p.setVolume(0)
+        p.mute()
+        p.pauseVideo()
+      } catch {
+        /* ignore */
+      }
       finishedRef.current = true
       fadingRef.current = false
-      const done = onFadeCompleteRef.current ?? onEndedRef.current
-      done()
+      ;(onFadeCompleteRef.current ?? onEndedRef.current)()
     }
-
-    fadeRafRef.current = requestAnimationFrame(tick)
+    fadeRaf.current = requestAnimationFrame(tick)
   }
 
-  // ——— Montar player UNA sola vez; host fuera del reconciler de React ———
-  useEffect(() => {
-    let cancelled = false
-    let kickTimer: number | undefined
+  /** Crea el YT.Player solo cuando hay un videoId válido */
+  async function ensurePlayer(firstId: string) {
+    if (playerRef.current || creatingRef.current) return
     const wrap = wrapRef.current
     if (!wrap) return
 
-    // Nodo hijo gestionado solo por nosotros / YT (React no lo toca)
-    const host = document.createElement('div')
-    host.style.width = '100%'
-    host.style.height = '100%'
-    wrap.appendChild(host)
+    creatingRef.current = true
+    setStatus(null)
 
-    async function mountOnce() {
-      try {
-        await loadYouTubeApi()
-        if (cancelled || !window.YT?.Player) {
-          if (!cancelled) setBootError('No se cargó la API de YouTube')
-          return
-        }
-        if (playerRef.current) return
+    try {
+      await ensureYouTubeApi()
+      if (!window.YT?.Player) {
+        setStatus('No se pudo cargar YouTube. Revisa la red o bloqueadores.')
+        creatingRef.current = false
+        return
+      }
+      if (playerRef.current) {
+        creatingRef.current = false
+        return
+      }
 
-        const initialId = desiredIdRef.current || undefined
+      // Host limpio (YT reemplaza este nodo por iframe)
+      wrap.innerHTML = ''
+      const host = document.createElement('div')
+      host.style.width = '100%'
+      host.style.height = '100%'
+      wrap.appendChild(host)
+      hostRef.current = host
 
-        playerRef.current = new window.YT.Player(host, {
-          width: '100%',
-          height: '100%',
-          ...(initialId ? { videoId: initialId } : {}),
-          playerVars: {
-            autoplay: initialId ? 1 : 0,
-            controls: 1,
-            rel: 0,
-            modestbranding: 1,
-            // Crítico iOS: inline, no fullscreen forzado
-            playsinline: 1,
-            // Primer autoplay con mute (política Safari/iOS)
-            mute: 1,
-            // Fullscreen nativo de YT OFF: usamos fullscreen del stage
-            fs: 0,
-            origin:
-              typeof window !== 'undefined' ? window.location.origin : '',
-          },
-          events: {
-            onReady: (event) => {
-              if (cancelled) return
-              readyRef.current = true
-              playerRef.current = event.target
-              setBootError(null)
-              setPlayerReady(true)
+      playerRef.current = new window.YT.Player(host, {
+        width: '100%',
+        height: '100%',
+        videoId: firstId,
+        playerVars: {
+          autoplay: 1,
+          controls: 1,
+          rel: 0,
+          modestbranding: 1,
+          playsinline: 1,
+          mute: 1,
+          fs: 0,
+          enablejsapi: 1,
+          origin: window.location.origin,
+        },
+        events: {
+          onReady: (event: { target: YTPlayer }) => {
+            readyRef.current = true
+            playerRef.current = event.target
+            creatingRef.current = false
+            loadedRef.current = firstId
+            try {
+              event.target.mute()
+              event.target.setVolume(100)
+            } catch {
+              /* ignore */
+            }
 
+            const want = desiredRef.current
+            if (want && want !== firstId) {
+              playOrLoad(want)
+            } else if (want) {
               try {
-                event.target.mute()
-                event.target.setVolume(100)
+                event.target.playVideo()
               } catch {
-                /* ignore */
+                setNeedsGesture(true)
               }
-
-              const want = desiredIdRef.current
-              if (want) {
+              window.setTimeout(() => {
                 try {
-                  event.target.mute()
-                  // Siempre loadVideoById: consistente aunque el ctor ya tuviera id
-                  event.target.loadVideoById({
-                    videoId: want,
-                    startSeconds: 0,
-                  })
-                  loadedIdRef.current = want
+                  const st = event.target.getPlayerState()
+                  if (st === -1 || st === YT_PAUSED || st === YT_CUED) {
+                    setNeedsGesture(true)
+                  }
                 } catch {
                   setNeedsGesture(true)
                 }
-
-                kickTimer = window.setTimeout(() => {
-                  try {
-                    const st = event.target.getPlayerState()
-                    if (st === -1 || st === YT_PAUSED || st === YT_CUED) {
-                      setNeedsGesture(true)
-                    }
-                  } catch {
-                    setNeedsGesture(true)
-                  }
-                }, 2500)
-              } else {
-                setIdle(true)
+              }, 2200)
+            } else {
+              setIdle(true)
+              try {
+                event.target.pauseVideo()
+              } catch {
+                /* ignore */
               }
-            },
-            onStateChange: (event) => {
-              const state = event.data
-
-              if (state === YT_PLAYING) {
-                setNeedsGesture(false)
-                setIdle(false)
-                if (!fadingRef.current) {
-                  restoreFullVolume(event.target)
-                }
-                const vid = readLoadedVideoId(event.target)
-                if (vid) loadedIdRef.current = vid
-              }
-
-              if (state === YT_ENDED && !fadingRef.current) {
-                if (Date.now() < ignoreEndedUntilRef.current) return
-                if (finishedRef.current) return
-                finishedRef.current = true
-                onEndedRef.current()
-              }
-            },
-            onError: (event) => {
-              onErrorRef.current?.(event.data)
-            },
-            onAutoplayBlocked: () => {
-              setNeedsGesture(true)
-            },
+            }
           },
-        })
-      } catch (e) {
-        if (!cancelled) {
-          setBootError(
-            e instanceof Error ? e.message : 'Error al crear el player'
-          )
-        }
-      }
+          onStateChange: (event: { data: number; target: YTPlayer }) => {
+            if (event.data === YT_PLAYING) {
+              setNeedsGesture(false)
+              setIdle(false)
+              setStatus(null)
+              if (!fadingRef.current) restoreAudio(event.target)
+              const vid = readId(event.target)
+              if (vid) loadedRef.current = vid
+            }
+            if (event.data === YT_ENDED && !fadingRef.current) {
+              if (Date.now() < ignoreEndedUntil.current) return
+              if (finishedRef.current) return
+              finishedRef.current = true
+              onEndedRef.current()
+            }
+          },
+          onError: (event: { data: number }) => {
+            const code = event.data
+            const hints: Record<number, string> = {
+              2: 'ID de video inválido',
+              5: 'Error HTML5 del player',
+              100: 'Video no encontrado o privado',
+              101: 'El dueño no permite embeber este video',
+              150: 'El dueño no permite embeber este video',
+              153: 'YouTube bloqueó el embed (Referer). Revisa dominio en Vercel.',
+            }
+            setStatus(hints[code] || `Error YouTube (${code})`)
+            onErrorRef.current?.(code)
+          },
+          onAutoplayBlocked: () => {
+            setNeedsGesture(true)
+          },
+        },
+      })
+    } catch (e) {
+      creatingRef.current = false
+      setStatus(e instanceof Error ? e.message : 'Error creando el player')
     }
+  }
 
-    void mountOnce()
-
+  // Cleanup al salir de la página TV
+  useEffect(() => {
     return () => {
-      cancelled = true
-      if (kickTimer) window.clearTimeout(kickTimer)
-      cancelFadeLoop()
+      cancelFade()
+      readyRef.current = false
       if (playerRef.current) {
         try {
           playerRef.current.destroy()
@@ -442,70 +428,74 @@ export default function YouTubePlayer({
         }
         playerRef.current = null
       }
-      readyRef.current = false
-      loadedIdRef.current = null
-      try {
-        wrap.innerHTML = ''
-      } catch {
-        /* ignore */
+      if (wrapRef.current) {
+        try {
+          wrapRef.current.innerHTML = ''
+        } catch {
+          /* ignore */
+        }
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- montaje único de página
   }, [])
 
-  // ——— Cambio de canción: loadVideoById, sin remount ———
+  // videoId cambia → crear o loadVideoById
   useEffect(() => {
-    if (!playerReady || !readyRef.current || !playerRef.current) return
     const id = videoId?.trim() || null
-    playOrLoad(id)
+    desiredRef.current = id
+
+    if (!id) {
+      setIdle(true)
+      if (playerRef.current && readyRef.current) {
+        playOrLoad(null)
+      }
+      return
+    }
+
+    if (!playerRef.current) {
+      void ensurePlayer(id)
+      return
+    }
+
+    if (readyRef.current) {
+      playOrLoad(id)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [videoId, playerReady])
+  }, [videoId])
 
-  useEffect(() => {
-    void nextVideoId
-  }, [nextVideoId])
-
+  // Fade por votos
   useEffect(() => {
     if (fadeOutKey == null || fadeOutKey === '') return
-    if (lastFadeKeyRef.current === fadeOutKey) return
-    lastFadeKeyRef.current = fadeOutKey
-    const t = window.setTimeout(() => startFadeOut(fadeOutMs), 60)
+    if (lastFadeKey.current === fadeOutKey) return
+    lastFadeKey.current = fadeOutKey
+    const t = window.setTimeout(() => startFadeOut(fadeOutMs), 50)
     return () => window.clearTimeout(t)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fadeOutKey, fadeOutMs])
 
   function handleUnlock() {
-    const player = playerRef.current
-    if (!player) return
+    const p = playerRef.current
+    if (!p) return
     try {
-      sessionUnlockedRef.current = true
-      player.unMute()
-      player.setVolume(100)
-      const want = desiredIdRef.current
+      unlockedRef.current = true
+      p.unMute()
+      p.setVolume(100)
+      const want = desiredRef.current
       if (want) {
-        if (loadedIdRef.current !== want) {
-          player.loadVideoById({ videoId: want, startSeconds: 0 })
-          loadedIdRef.current = want
-        } else {
-          player.playVideo()
+        if (loadedRef.current !== want) {
+          p.loadVideoById({ videoId: want, startSeconds: 0 })
+          loadedRef.current = want
         }
-      } else {
-        player.playVideo()
+        p.playVideo()
       }
       setNeedsGesture(false)
+      setStatus(null)
     } catch {
-      /* ignore */
+      setStatus('No se pudo iniciar. Vuelve a tocar.')
     }
   }
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
-      <Script
-        src="https://www.youtube.com/iframe_api"
-        strategy="afterInteractive"
-      />
-
-      {/* Solo este wrapper es de React; el iframe lo crea YT dentro */}
       <div
         ref={wrapRef}
         className="absolute inset-0 h-full w-full transition-opacity duration-500"
@@ -518,42 +508,29 @@ export default function YouTubePlayer({
         <span className="sr-only">Reproduciendo: {title}</span>
       ) : null}
 
-      {bootError && (
-        <div className="absolute inset-0 z-[25] flex flex-col items-center justify-center bg-black/90 p-6 text-center">
-          <p className="text-lg font-semibold text-red-300">
-            Error del reproductor
-          </p>
-          <p className="mt-2 max-w-md text-sm text-zinc-400">{bootError}</p>
-          <button
-            type="button"
-            onClick={() => window.location.reload()}
-            className="mt-4 rounded-full bg-emerald-600 px-5 py-2 text-sm font-semibold text-white"
-          >
-            Recargar
-          </button>
+      {status && (
+        <div className="absolute inset-x-0 top-0 z-[25] bg-red-950/90 px-4 py-2 text-center text-sm text-red-100">
+          {status}
         </div>
       )}
 
-      {idle && !needsGesture && !bootError && (
+      {idle && !needsGesture && (
         <div className="pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black/80 p-6 text-center">
           <p className="text-xl text-zinc-400">Esperando canciones…</p>
           <p className="mt-2 text-sm text-zinc-600">
-            Player listo · sin recargar iframe
+            El video arranca al llegar el primer pedido
           </p>
         </div>
       )}
 
       {fading && (
         <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-end bg-gradient-to-t from-black via-black/40 to-transparent pb-10">
-          <p className="text-sm font-medium tracking-wide text-zinc-100">
+          <p className="text-sm font-medium text-zinc-100">
             Bajando el volumen…
-          </p>
-          <p className="mt-1 text-xs text-zinc-400">
-            La sala pidió cambio · pasando a la siguiente
           </p>
           <div className="mt-3 h-1 w-40 overflow-hidden rounded-full bg-zinc-800">
             <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-75"
+              className="h-full rounded-full bg-emerald-500"
               style={{ width: `${fadeProgress}%` }}
             />
           </div>
@@ -567,7 +544,7 @@ export default function YouTubePlayer({
           className="absolute inset-0 z-20 flex items-center justify-center bg-black/75 text-white"
         >
           <span className="rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold shadow-lg hover:bg-emerald-500">
-            ▶ Toca para iniciar (iOS / TV)
+            ▶ Toca para iniciar
           </span>
         </button>
       )}
