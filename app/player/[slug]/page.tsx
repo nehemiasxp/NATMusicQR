@@ -7,9 +7,9 @@ import { supabase } from '@/lib/supabase'
 import { advanceQueue, ensurePlayingItem, fetchActiveQueue } from '@/lib/queue'
 import type { QueueItem, Venue } from '@/lib/types'
 
-const POLL_MS = 3000
-/** Versión player (fade votos) */
-export const PLAYER_UI_VERSION = '2.1.5'
+const POLL_MS = 1500
+/** Versión player — reacciona a super poderes (cancel remoto) */
+export const PLAYER_UI_VERSION = '2.2.0'
 
 type RuntimeFlags = {
   autoplayEnabled: boolean
@@ -44,6 +44,8 @@ export default function PlayerPage() {
   const excludeIdsRef = useRef<Set<string>>(new Set())
   const playingItemRef = useRef<QueueItem | null>(null)
   const rlsLocalRef = useRef(false)
+  /** Tras cancel remoto: no rellenar con autoplay hasta que haya un pedido real */
+  const suppressAutoplayRef = useRef(false)
   const flagsRef = useRef<RuntimeFlags>({
     autoplayEnabled: false,
     votingEnabled: true,
@@ -84,8 +86,12 @@ export default function PlayerPage() {
 
   const refreshQueue = useCallback(
     async (venueId: string, opts?: { promote?: boolean }) => {
+      if (advancingRef.current) return
+
       const promote = opts?.promote !== false
-      const autoplayEnabled = flagsRef.current.autoplayEnabled
+      const autoplayEnabled =
+        flagsRef.current.autoplayEnabled && !suppressAutoplayRef.current
+      const localCurrent = playingItemRef.current
 
       if (promote) {
         const { items, playing, error: syncError, rlsBlocked } =
@@ -104,6 +110,16 @@ export default function PlayerPage() {
           return
         }
 
+        // Si cambió la canción por control remoto, limpiar fade/votos
+        if (localCurrent && playing?.id !== localCurrent.id) {
+          setFadeOutKey(null)
+          setVoteStats(null)
+          if (playing) setPlayerNote(null)
+        }
+
+        // Pedido real o autoplay OK → permitir autoplay otra vez
+        if (playing) suppressAutoplayRef.current = false
+
         applyQueueState(items, playing)
         if (syncError && !playing) setError(syncError.message)
         else setError(null)
@@ -121,16 +137,67 @@ export default function PlayerPage() {
         list = items.filter((i) => !excludeIdsRef.current.has(i.id))
       }
 
-      const playing =
+      const hasQueued = list.some((i) => i.status === 'queued')
+      // Si hay pedidos de mesa, reactivar autoplay para el futuro
+      if (hasQueued) suppressAutoplayRef.current = false
+
+      const dbPlaying =
         list.find((i) => i.status === 'playing' && i.videos?.youtube_id) ??
         null
 
-      if (!playing && (list.some((i) => i.status === 'queued') || autoplayEnabled)) {
+      // Control remoto (mesa i9): la canción local ya no está en playing
+      if (localCurrent) {
+        const stillMine =
+          dbPlaying?.id === localCurrent.id ||
+          list.some(
+            (i) => i.id === localCurrent.id && i.status === 'playing'
+          )
+
+        if (!stillMine) {
+          if (rlsLocalRef.current) {
+            excludeIdsRef.current.add(localCurrent.id)
+          }
+          setFadeOutKey(null)
+          setVoteStats(null)
+
+          if (dbPlaying) {
+            // API ya puso otra en playing (siguiente / autoplay del control)
+            suppressAutoplayRef.current = false
+            applyQueueState(list, dbPlaying)
+            setPlayerNote(null)
+            setError(null)
+            return
+          }
+
+          // Solo promover si hay pedidos en cola (no autoplay tras cancel)
+          if (hasQueued) {
+            setPlayerNote('Control remoto · pasando a la siguiente…')
+            await refreshQueue(venueId, { promote: true })
+            return
+          }
+
+          // Cola vacía tras cancel: silencio (no rellenar autoplay)
+          suppressAutoplayRef.current = true
+          applyQueueState(list, null)
+          setPlayerNote('Canción cancelada · esperando pedidos')
+          setError(null)
+          return
+        }
+      }
+
+      if (dbPlaying) {
+        suppressAutoplayRef.current = false
+        applyQueueState(list, dbPlaying)
+        setError(null)
+        return
+      }
+
+      if (hasQueued || autoplayEnabled) {
         await refreshQueue(venueId, { promote: true })
         return
       }
 
-      applyQueueState(list, playing)
+      applyQueueState(list, null)
       setError(null)
     },
     [applyQueueState]
@@ -156,6 +223,8 @@ export default function PlayerPage() {
           excludeIdsRef.current.add(current.id)
         }
 
+        // Fin natural / votos: sí puede usar autoplay
+        suppressAutoplayRef.current = false
         const result = await advanceQueue(venueId, current.id, {
           excludeIds: rlsLocalRef.current
             ? excludeIdsRef.current

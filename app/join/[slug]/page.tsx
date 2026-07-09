@@ -12,6 +12,7 @@ import {
   type MesaSession,
 } from '@/lib/mesa-session'
 import { getOrCreateDeviceId } from '@/lib/device-id'
+import { isSuperSession } from '@/lib/super-mesa'
 import type { QueueItem, Venue, Video } from '@/lib/types'
 
 type PublicConfig = {
@@ -44,8 +45,8 @@ type SearchItem = {
   thumbnailUrl: string | null
 }
 
-/** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.9'
+/** v2.2 — super poderes mesa i9 (control TV robusto) */
+export const JOIN_UI_VERSION = '2.2.2'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -98,6 +99,7 @@ export default function JoinPage() {
   const [voteBusy, setVoteBusy] = useState(false)
   const [showMesas, setShowMesas] = useState(false)
   const [activeMesas, setActiveMesas] = useState<ActiveMesa[]>([])
+  const [superBusy, setSuperBusy] = useState<string | null>(null)
 
   // Cargar sesión de mesa + deviceId + reglas
   useEffect(() => {
@@ -319,6 +321,76 @@ export default function JoinPage() {
       setMessage('Error de red al votar')
     } finally {
       setVoteBusy(false)
+    }
+  }
+
+  async function runSuperAction(
+    action: 'next' | 'cancel_direct' | 'cancel_all' | 'remove',
+    queueItemId?: string
+  ) {
+    if (!slug || !session || superBusy) return
+    if (!isSuperSession(session)) {
+      setMessage('Sin super poderes en esta mesa (usa mesa o nombre i9)')
+      return
+    }
+
+    if (action === 'cancel_all') {
+      const ok = window.confirm(
+        '¿Cancelar TODA la cola? Se saltarán la canción actual y todas las pendientes.'
+      )
+      if (!ok) return
+    }
+
+    if (action === 'cancel_direct' && !playing) {
+      setMessage('No hay música en reproducción')
+      return
+    }
+
+    setSuperBusy(action === 'remove' && queueItemId ? `rm-${queueItemId}` : action)
+    setMessage(null)
+    try {
+      // Enviar label completo (mesa · nombre) para que la API reconozca i9
+      const superLabel =
+        formatTableLabel(session) ||
+        session.tableName ||
+        session.displayName ||
+        'i9'
+
+      const res = await fetch('/api/queue/control', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          venueSlug: slug,
+          tableName: superLabel,
+          action,
+          queueItemId,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setMessage(
+          [data.error, data.hint].filter(Boolean).join(' — ') ||
+            'No se pudo ejecutar la acción'
+        )
+        return
+      }
+      setMessage(data.message || 'Listo')
+      // Actualizar cola local al instante si la API devuelve snapshot
+      if (data.queue?.items && Array.isArray(data.queue.items)) {
+        setQueue(data.queue.items as QueueItem[])
+      } else if (venue) {
+        await loadQueue(venue.id)
+      }
+      // Refresco extra por si la TV/Realtime tarda
+      if (venue) {
+        window.setTimeout(() => {
+          void loadQueue(venue.id)
+        }, 800)
+      }
+    } catch {
+      setMessage('Error de red en super poderes')
+    } finally {
+      setSuperBusy(null)
     }
   }
 
@@ -626,6 +698,8 @@ export default function JoinPage() {
   }
 
   // ——— Jukebox (ya con mesa) ———
+  const superMode = isSuperSession(session)
+
   const tabs: { id: Tab; label: string; short: string }[] = [
     { id: 'queue', label: `En cola (${waiting.length})`, short: `Cola (${waiting.length})` },
     {
@@ -666,6 +740,7 @@ export default function JoinPage() {
             >
               <span className="text-emerald-400">🪑</span>
               <span className="max-w-[9rem] truncate">
+                {superMode ? '⚡ ' : ''}
                 {formatTableLabel(session)}
               </span>
               <span className="text-[10px] text-emerald-500/80">
@@ -750,6 +825,51 @@ export default function JoinPage() {
           />
         )}
 
+        {/* Super poderes — solo mesa i9 */}
+        {superMode && (
+          <section className="mb-4 overflow-hidden rounded-2xl border border-violet-500/40 bg-gradient-to-br from-violet-950/80 to-zinc-900 shadow-lg shadow-violet-950/30">
+            <div className="flex items-center justify-between border-b border-violet-500/20 px-4 py-2.5">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.16em] text-violet-300">
+                ⚡ Super poderes
+              </p>
+              <span className="rounded-full bg-violet-500/20 px-2 py-0.5 text-[10px] font-bold text-violet-200 ring-1 ring-violet-400/30">
+                mesa i9 · sin límites
+              </span>
+            </div>
+            <div className="grid grid-cols-2 gap-2 p-3 sm:grid-cols-3">
+              <button
+                type="button"
+                disabled={!!superBusy || !playing}
+                onClick={() => void runSuperAction('next')}
+                className="rounded-xl border border-violet-500/30 bg-violet-600/90 px-2 py-3 text-center text-xs font-bold text-white transition hover:bg-violet-500 disabled:opacity-40 sm:text-sm"
+              >
+                {superBusy === 'next' ? '…' : '⏭ Siguiente'}
+              </button>
+              <button
+                type="button"
+                disabled={!!superBusy || !playing}
+                onClick={() => void runSuperAction('cancel_direct')}
+                className="rounded-xl border border-amber-600/40 bg-amber-700/80 px-2 py-3 text-center text-xs font-bold text-white transition hover:bg-amber-600 disabled:opacity-40 sm:text-sm"
+              >
+                {superBusy === 'cancel_direct' ? '…' : '⏹ Cancelar en repro.'}
+              </button>
+              <button
+                type="button"
+                disabled={!!superBusy || (waiting.length === 0 && !playing)}
+                onClick={() => void runSuperAction('cancel_all')}
+                className="col-span-2 rounded-xl border border-red-700/40 bg-red-800/80 px-2 py-3 text-center text-xs font-bold text-white transition hover:bg-red-700 disabled:opacity-40 sm:col-span-1 sm:text-sm"
+              >
+                {superBusy === 'cancel_all' ? '…' : '🗑 Cancelar todo'}
+              </button>
+            </div>
+            <p className="px-4 pb-3 text-[11px] leading-relaxed text-violet-200/70">
+              Siguiente = pasa a la siguiente. Cancelar en reproducción = corta
+              la que suena ya. Cancelar todo = vacía cola completa. También hay
+              botones en la tarjeta “Ahora suena” y en cada canción de la cola.
+            </p>
+          </section>
+        )}
+
         {/* Ahora suena (siempre visible) */}
         <section className="mb-4 overflow-hidden rounded-2xl border border-zinc-800/90 bg-gradient-to-br from-emerald-950/70 to-zinc-900/80">
           <div className="flex items-center justify-between border-b border-white/5 px-4 py-2.5">
@@ -789,6 +909,30 @@ export default function JoinPage() {
                   )}
                 </div>
               </div>
+
+              {/* Super: cancelar / saltar la que está sonando ahora */}
+              {superMode && (
+                <div className="grid grid-cols-2 gap-2 border-t border-white/10 pt-3">
+                  <button
+                    type="button"
+                    disabled={!!superBusy}
+                    onClick={() => void runSuperAction('cancel_direct')}
+                    className="rounded-xl border border-amber-600/50 bg-amber-700 px-3 py-2.5 text-center text-xs font-bold text-white shadow-md shadow-amber-950/30 transition hover:bg-amber-600 disabled:opacity-40 sm:text-sm"
+                  >
+                    {superBusy === 'cancel_direct'
+                      ? 'Cancelando…'
+                      : '⏹ Cancelar en reproducción'}
+                  </button>
+                  <button
+                    type="button"
+                    disabled={!!superBusy}
+                    onClick={() => void runSuperAction('next')}
+                    className="rounded-xl border border-violet-500/40 bg-violet-600 px-3 py-2.5 text-center text-xs font-bold text-white shadow-md shadow-violet-950/30 transition hover:bg-violet-500 disabled:opacity-40 sm:text-sm"
+                  >
+                    {superBusy === 'next' ? '…' : '⏭ Siguiente canción'}
+                  </button>
+                </div>
+              )}
 
               {/* Votos: manito a la izquierda del texto, proporciones equilibradas */}
               {rules?.voting?.enabled !== false && (
@@ -902,11 +1046,19 @@ export default function JoinPage() {
 
         {rules && (
           <p className="mb-3 text-[11px] text-zinc-500">
-            Máx. {Math.round(rules.maxDurationSeconds / 60)} min
-            {rules.perDevice.enabled &&
-              ` · ${rules.perDevice.maxSongs}/celular cada ${rules.perDevice.windowMinutes} min`}
-            {rules.perTable.enabled &&
-              ` · ${rules.perTable.maxSongs}/mesa cada ${rules.perTable.windowMinutes} min`}
+            {superMode ? (
+              <span className="text-violet-400/90">
+                Super poderes activos · sin cuotas de pedidos
+              </span>
+            ) : (
+              <>
+                Máx. {Math.round(rules.maxDurationSeconds / 60)} min
+                {rules.perDevice.enabled &&
+                  ` · ${rules.perDevice.maxSongs}/celular cada ${rules.perDevice.windowMinutes} min`}
+                {rules.perTable.enabled &&
+                  ` · ${rules.perTable.maxSongs}/mesa cada ${rules.perTable.windowMinutes} min`}
+              </>
+            )}
           </p>
         )}
 
@@ -974,9 +1126,20 @@ export default function JoinPage() {
                           : ''}
                       </p>
                     </div>
-                    <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] font-medium text-zinc-400">
-                      En cola
-                    </span>
+                    {superMode ? (
+                      <button
+                        type="button"
+                        disabled={!!superBusy}
+                        onClick={() => void runSuperAction('remove', item.id)}
+                        className="shrink-0 rounded-full border border-red-800/60 bg-red-950/50 px-2.5 py-1 text-[10px] font-semibold text-red-300 transition hover:bg-red-900/60 disabled:opacity-40"
+                      >
+                        {superBusy === `rm-${item.id}` ? '…' : 'Eliminar'}
+                      </button>
+                    ) : (
+                      <span className="shrink-0 rounded-full bg-zinc-800 px-2 py-0.5 text-[10px] font-medium text-zinc-400">
+                        En cola
+                      </span>
+                    )}
                   </div>
                 ))}
               </div>

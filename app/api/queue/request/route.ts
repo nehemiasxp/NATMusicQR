@@ -3,6 +3,7 @@ import { createClient } from '@supabase/supabase-js'
 import { checkVenueAccess } from '@/lib/access'
 import { checkRequestRateLimits, getClientIp } from '@/lib/rate-limit'
 import { getRuntimeConfig } from '@/lib/settings'
+import { isSuperMesa } from '@/lib/super-mesa'
 import { getYoutubeApiKey, validateYoutubeVideo } from '@/lib/youtube'
 
 function getSupabase() {
@@ -74,22 +75,25 @@ export async function POST(request: NextRequest) {
     )
   }
 
-  const limits = await checkRequestRateLimits(supabase, {
-    venueId: venue.id,
-    tableLabel: tableName,
-    deviceId,
-    ip,
-    config: cfg,
-  })
-  if (!limits.ok) {
-    return NextResponse.json(
-      {
-        error: limits.error,
-        code: limits.code,
-        retryAfterMinutes: limits.retryAfterMinutes,
-      },
-      { status: 429 }
-    )
+  // Mesa i9: sin cuotas (super poderes)
+  if (!isSuperMesa(tableName)) {
+    const limits = await checkRequestRateLimits(supabase, {
+      venueId: venue.id,
+      tableLabel: tableName,
+      deviceId,
+      ip,
+      config: cfg,
+    })
+    if (!limits.ok) {
+      return NextResponse.json(
+        {
+          error: limits.error,
+          code: limits.code,
+          retryAfterMinutes: limits.retryAfterMinutes,
+        },
+        { status: 429 }
+      )
+    }
   }
 
   let resolvedYoutubeId = youtubeId
