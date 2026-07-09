@@ -7,7 +7,7 @@ import type { RuntimeJukeboxConfig } from '@/config/jukebox.config'
 const STORAGE_KEY = 'natmusicqr:admin-password'
 
 /** Sube este número en cada release para verificar el deploy en Vercel */
-export const ADMIN_UI_VERSION = '2.1.1'
+export const ADMIN_UI_VERSION = '2.2.0'
 
 const emptyConfig: RuntimeJukeboxConfig = {
   maxDurationSeconds: 300,
@@ -33,7 +33,18 @@ const emptyConfig: RuntimeJukeboxConfig = {
   ui: { showQueueOnJoin: true, pollIntervalMs: 3000 },
 }
 
-type TabId = 'rules' | 'qr' | 'security'
+type TabId = 'rules' | 'qr' | 'security' | 'library'
+
+type LibraryVideo = {
+  id: string
+  youtube_id: string
+  title: string
+  artist: string | null
+  thumbnail_url: string | null
+  duration_seconds: number | null
+  category: string | null
+  is_active: boolean
+}
 
 function qrImageUrl(data: string, size = 140) {
   return `https://api.qrserver.com/v1/create-qr-code/?size=${size}x${size}&margin=8&data=${encodeURIComponent(data)}`
@@ -118,6 +129,11 @@ export default function AdminPage() {
   const [pwdSaving, setPwdSaving] = useState(false)
   const [pwdMessage, setPwdMessage] = useState<string | null>(null)
   const [pwdError, setPwdError] = useState<string | null>(null)
+
+  const [library, setLibrary] = useState<LibraryVideo[]>([])
+  const [libraryLoading, setLibraryLoading] = useState(false)
+  const [libraryFilter, setLibraryFilter] = useState('')
+  const [deletingId, setDeletingId] = useState<string | null>(null)
 
   useEffect(() => {
     if (typeof window !== 'undefined') setBaseUrl(window.location.origin)
@@ -300,6 +316,80 @@ export default function AdminPage() {
     void copyText(text, 'all')
   }
 
+  const loadLibrary = useCallback(
+    async (pwd: string, slug: string) => {
+      setLibraryLoading(true)
+      try {
+        const res = await fetch(
+          `/api/admin/videos?slug=${encodeURIComponent(slug)}`,
+          { headers: { 'x-admin-password': pwd } }
+        )
+        const data = await res.json()
+        if (!res.ok) {
+          setError(data.error || 'No se pudo cargar la biblioteca')
+          return
+        }
+        setLibrary((data.videos ?? []) as LibraryVideo[])
+      } catch {
+        setError('Error de red al cargar biblioteca')
+      } finally {
+        setLibraryLoading(false)
+      }
+    },
+    []
+  )
+
+  useEffect(() => {
+    if (authed && tab === 'library' && password) {
+      void loadLibrary(password, venueSlug.trim() || 'natmusicqr')
+    }
+  }, [authed, tab, password, venueSlug, loadLibrary])
+
+  const filteredLibrary = useMemo(() => {
+    const q = libraryFilter.trim().toLowerCase()
+    if (!q) return library
+    return library.filter((v) => {
+      const hay = `${v.title} ${v.artist ?? ''} ${v.category ?? ''} ${v.youtube_id}`.toLowerCase()
+      return hay.includes(q)
+    })
+  }, [library, libraryFilter])
+
+  async function deleteVideo(video: LibraryVideo) {
+    const ok = window.confirm(
+      `¿Eliminar de la biblioteca?\n\n“${video.title}”\n\nTambién se quitará de la cola si está pendiente.`
+    )
+    if (!ok) return
+
+    setDeletingId(video.id)
+    setError(null)
+    setMessage(null)
+    try {
+      const res = await fetch('/api/admin/videos', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          'x-admin-password': password,
+        },
+        body: JSON.stringify({ password, videoId: video.id }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(
+          data.hint
+            ? `${data.error} — ${data.hint}`
+            : data.error || 'No se pudo eliminar'
+        )
+        return
+      }
+      setLibrary((list) => list.filter((v) => v.id !== video.id))
+      setMessage(`Eliminada: ${data.deleted?.title ?? video.title}`)
+    } catch {
+      setError('Error de red al eliminar')
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   /* ——— Login ——— */
   if (!authed) {
     return (
@@ -362,6 +452,7 @@ export default function AdminPage() {
     { id: 'rules', label: 'Reglas' },
     { id: 'qr', label: 'QR mesas' },
     { id: 'security', label: 'Seguridad' },
+    { id: 'library', label: 'Biblioteca' },
   ]
 
   return (
@@ -984,6 +1075,105 @@ export default function AdminPage() {
                 {pwdSaving ? 'Actualizando…' : 'Cambiar contraseña'}
               </button>
             </form>
+          </section>
+        )}
+
+        {/* ——— BIBLIOTECA ——— */}
+        {tab === 'library' && (
+          <section className="space-y-3">
+            <div className={`${cardClass} space-y-3`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <SectionHead
+                  title="Biblioteca de música"
+                  desc="Elimina canciones del catálogo del local (join + autoplay)"
+                />
+                <button
+                  type="button"
+                  onClick={() =>
+                    void loadLibrary(password, venueSlug.trim() || 'natmusicqr')
+                  }
+                  disabled={libraryLoading}
+                  className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-emerald-500/40 hover:text-emerald-300 disabled:opacity-50"
+                >
+                  {libraryLoading ? 'Cargando…' : 'Actualizar'}
+                </button>
+              </div>
+              <div className="grid gap-2.5 sm:grid-cols-3">
+                <Field label="Slug del local" className="sm:col-span-1">
+                  <input
+                    type="text"
+                    value={venueSlug}
+                    onChange={(e) => setVenueSlug(e.target.value)}
+                    className={inputClass}
+                  />
+                </Field>
+                <Field label="Buscar" className="sm:col-span-2">
+                  <input
+                    type="search"
+                    value={libraryFilter}
+                    onChange={(e) => setLibraryFilter(e.target.value)}
+                    className={inputClass}
+                    placeholder="Título, artista, categoría…"
+                  />
+                </Field>
+              </div>
+              <p className="text-[11px] text-zinc-600">
+                {filteredLibrary.length} de {library.length} canciones
+              </p>
+            </div>
+
+            {libraryLoading && library.length === 0 ? (
+              <p className="py-8 text-center text-sm text-zinc-500">
+                Cargando biblioteca…
+              </p>
+            ) : filteredLibrary.length === 0 ? (
+              <p className="py-8 text-center text-sm text-zinc-500">
+                No hay canciones para mostrar
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {filteredLibrary.map((video) => (
+                  <div
+                    key={video.id}
+                    className="flex items-center gap-3 rounded-xl border border-zinc-800/80 bg-zinc-900/40 p-3"
+                  >
+                    {video.thumbnail_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img
+                        src={video.thumbnail_url}
+                        alt=""
+                        className="h-12 w-[4.5rem] shrink-0 rounded-md object-cover"
+                      />
+                    ) : (
+                      <div className="flex h-12 w-[4.5rem] shrink-0 items-center justify-center rounded-md bg-zinc-800 text-[10px] text-zinc-600">
+                        sin img
+                      </div>
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-medium text-zinc-100">
+                        {video.title}
+                      </p>
+                      <p className="truncate text-xs text-zinc-500">
+                        {video.artist || '—'}
+                        {video.category ? ` · ${video.category}` : ''}
+                        {!video.is_active ? ' · inactiva' : ''}
+                      </p>
+                      <p className="truncate font-[family-name:var(--font-geist-mono)] text-[10px] text-zinc-600">
+                        yt:{video.youtube_id}
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={deletingId === video.id}
+                      onClick={() => void deleteVideo(video)}
+                      className="shrink-0 rounded-lg border border-red-900/50 bg-red-950/40 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:border-red-600 hover:bg-red-900/50 hover:text-red-100 disabled:opacity-50"
+                    >
+                      {deletingId === video.id ? '…' : 'Eliminar'}
+                    </button>
+                  </div>
+                ))}
+              </div>
+            )}
           </section>
         )}
 
