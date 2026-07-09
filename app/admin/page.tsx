@@ -8,7 +8,7 @@ const STORAGE_KEY = 'natmusicqr:admin-password'
 const DEVICE_KEY = 'natmusicqr:admin-device-id'
 
 /** Sube este número en cada release para verificar el deploy en Vercel */
-export const ADMIN_UI_VERSION = '2.3.0'
+export const ADMIN_UI_VERSION = '2.4.0'
 
 type AdminDeviceRow = {
   id: string
@@ -69,7 +69,37 @@ const emptyConfig: RuntimeJukeboxConfig = {
   ui: { showQueueOnJoin: true, pollIntervalMs: 3000 },
 }
 
-type TabId = 'rules' | 'qr' | 'security' | 'library'
+type TabId = 'rules' | 'sala' | 'qr' | 'security' | 'library'
+
+type LiveClientSong = {
+  id: string
+  title: string
+  artist: string | null
+  status: string
+  addedAt: string
+}
+
+type LiveClient = {
+  key: string
+  label: string
+  deviceId: string | null
+  tableKey: string
+  requests: number
+  inQueue: number
+  playing: boolean
+  lastActivity: string
+  songs: LiveClientSong[]
+  banned: boolean
+}
+
+type BannedRow = {
+  id: string
+  label: string
+  deviceId?: string | null
+  tableKey?: string | null
+  reason?: string | null
+  bannedAt: string
+}
 
 type LibraryVideo = {
   id: string
@@ -174,6 +204,12 @@ export default function AdminPage() {
   const [libraryFilter, setLibraryFilter] = useState('')
   const [deletingId, setDeletingId] = useState<string | null>(null)
   const [deviceBusy, setDeviceBusy] = useState<string | null>(null)
+
+  const [liveClients, setLiveClients] = useState<LiveClient[]>([])
+  const [bannedRows, setBannedRows] = useState<BannedRow[]>([])
+  const [salaLoading, setSalaLoading] = useState(false)
+  const [kickBusy, setKickBusy] = useState<string | null>(null)
+  const [expandedClient, setExpandedClient] = useState<string | null>(null)
 
   const adminHeaders = useCallback(
     (pwd: string) => ({
@@ -540,6 +576,108 @@ export default function AdminPage() {
     }
   }, [authed, tab, password, venueSlug, loadLibrary])
 
+  const loadSala = useCallback(async () => {
+    if (!password || !deviceId) return
+    setSalaLoading(true)
+    try {
+      const res = await fetch(
+        `/api/admin/live-clients?slug=${encodeURIComponent(venueSlug.trim() || 'natmusicqr')}&hours=6`,
+        {
+          headers: adminHeaders(password),
+          cache: 'no-store',
+        }
+      )
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'No se pudo cargar la sala')
+        return
+      }
+      setLiveClients((data.clients ?? []) as LiveClient[])
+      setBannedRows((data.banned ?? []) as BannedRow[])
+    } catch {
+      setError('Error de red al cargar conectados')
+    } finally {
+      setSalaLoading(false)
+    }
+  }, [password, deviceId, venueSlug, adminHeaders])
+
+  useEffect(() => {
+    if (!authed || tab !== 'sala' || !password) return
+    void loadSala()
+    const t = window.setInterval(() => void loadSala(), 5000)
+    return () => window.clearInterval(t)
+  }, [authed, tab, password, loadSala])
+
+  async function kickClient(c: LiveClient) {
+    const ok = window.confirm(
+      `¿Expulsar a “${c.label}”?\n\nSe quitarán sus canciones de la cola y no podrá pedir más hasta que lo desbloquees.`
+    )
+    if (!ok) return
+    setKickBusy(c.key)
+    setError(null)
+    try {
+      const res = await fetch('/api/admin/live-clients', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...adminHeaders(password),
+        },
+        body: JSON.stringify({
+          password,
+          deviceId,
+          action: 'kick',
+          targetDeviceId: c.deviceId,
+          tableLabel: c.label,
+          label: c.label,
+          venueSlug: venueSlug.trim() || 'natmusicqr',
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'No se pudo expulsar')
+        return
+      }
+      setMessage(data.message || 'Expulsado')
+      if (data.banned) setBannedRows(data.banned as BannedRow[])
+      await loadSala()
+    } catch {
+      setError('Error de red al expulsar')
+    } finally {
+      setKickBusy(null)
+    }
+  }
+
+  async function unbanClient(banId: string) {
+    setKickBusy(banId)
+    try {
+      const res = await fetch('/api/admin/live-clients', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          ...adminHeaders(password),
+        },
+        body: JSON.stringify({
+          password,
+          deviceId,
+          action: 'unban',
+          banId,
+        }),
+      })
+      const data = await res.json()
+      if (!res.ok) {
+        setError(data.error || 'No se pudo desbloquear')
+        return
+      }
+      if (data.banned) setBannedRows(data.banned as BannedRow[])
+      setMessage('Cliente desbloqueado')
+      await loadSala()
+    } catch {
+      setError('Error de red')
+    } finally {
+      setKickBusy(null)
+    }
+  }
+
   const filteredLibrary = useMemo(() => {
     const q = libraryFilter.trim().toLowerCase()
     if (!q) return library
@@ -686,6 +824,7 @@ export default function AdminPage() {
 
   const tabs: { id: TabId; label: string }[] = [
     { id: 'rules', label: 'Reglas' },
+    { id: 'sala', label: 'Sala' },
     { id: 'qr', label: 'QR mesas' },
     { id: 'security', label: 'Seguridad' },
     { id: 'library', label: 'Biblioteca' },
@@ -1158,6 +1297,191 @@ export default function AdminPage() {
               {saving ? 'Guardando…' : 'Guardar reglas'}
             </button>
           </form>
+        )}
+
+        {/* ——— SALA / CONECTADOS ——— */}
+        {tab === 'sala' && (
+          <section className="space-y-3">
+            <div className={`${cardClass} space-y-3`}>
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <SectionHead
+                  title="Conectados en la sala"
+                  desc="Quién pidió música (últimas 6 h), temas y expulsar"
+                />
+                <button
+                  type="button"
+                  onClick={() => void loadSala()}
+                  disabled={salaLoading}
+                  className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-medium text-zinc-300 transition hover:border-emerald-500/40 hover:text-emerald-300 disabled:opacity-50"
+                >
+                  {salaLoading ? 'Actualizando…' : 'Actualizar'}
+                </button>
+              </div>
+              <p className="text-[11px] text-zinc-600">
+                {liveClients.length} cliente(s) · se refresca cada 5 s
+              </p>
+            </div>
+
+            {liveClients.length === 0 && !salaLoading ? (
+              <p className="py-10 text-center text-sm text-zinc-500">
+                Nadie ha pedido canciones en las últimas horas
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {liveClients.map((c) => (
+                  <div
+                    key={c.key}
+                    className={`rounded-xl border p-3 ${
+                      c.banned
+                        ? 'border-red-900/50 bg-red-950/20'
+                        : c.playing
+                          ? 'border-emerald-800/50 bg-emerald-950/20'
+                          : 'border-zinc-800/80 bg-zinc-900/40'
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <button
+                        type="button"
+                        className="min-w-0 flex-1 text-left"
+                        onClick={() =>
+                          setExpandedClient((k) =>
+                            k === c.key ? null : c.key
+                          )
+                        }
+                      >
+                        <p className="truncate text-sm font-semibold text-zinc-100">
+                          {c.label}
+                          {c.playing ? (
+                            <span className="ml-2 text-[10px] font-bold uppercase text-emerald-400">
+                              sonando
+                            </span>
+                          ) : null}
+                          {c.banned ? (
+                            <span className="ml-2 text-[10px] font-bold uppercase text-red-400">
+                              expulsado
+                            </span>
+                          ) : null}
+                        </p>
+                        <p className="mt-0.5 text-[11px] text-zinc-500">
+                          {c.requests} pedido{c.requests === 1 ? '' : 's'}
+                          {c.inQueue
+                            ? ` · ${c.inQueue} en cola/reproducción`
+                            : ''}
+                          {' · '}
+                          última act.{' '}
+                          {new Date(c.lastActivity).toLocaleTimeString()}
+                          {c.deviceId
+                            ? ` · cel ${c.deviceId.slice(0, 8)}…`
+                            : ''}
+                        </p>
+                        {c.songs[0] && (
+                          <p className="mt-1 truncate text-xs text-zinc-400">
+                            Último: {c.songs[0].title}
+                            {c.songs[0].status === 'playing'
+                              ? ' ▶'
+                              : c.songs[0].status === 'queued'
+                                ? ' (en cola)'
+                                : ''}
+                          </p>
+                        )}
+                      </button>
+                      {!c.banned ? (
+                        <button
+                          type="button"
+                          disabled={kickBusy === c.key}
+                          onClick={() => void kickClient(c)}
+                          className="shrink-0 rounded-lg border border-red-900/50 bg-red-950/40 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:border-red-600 hover:bg-red-900/40 disabled:opacity-50"
+                        >
+                          {kickBusy === c.key ? '…' : 'Expulsar'}
+                        </button>
+                      ) : (
+                        <span className="text-[10px] text-red-400">
+                          Bloqueado
+                        </span>
+                      )}
+                    </div>
+
+                    {expandedClient === c.key && (
+                      <div className="mt-3 border-t border-white/5 pt-3">
+                        <p className="mb-2 text-[10px] font-semibold uppercase tracking-wide text-zinc-500">
+                          Temas que puso
+                        </p>
+                        <ul className="max-h-48 space-y-1.5 overflow-y-auto">
+                          {c.songs.map((s) => (
+                            <li
+                              key={s.id}
+                              className="flex items-start justify-between gap-2 text-xs"
+                            >
+                              <span className="min-w-0 flex-1 text-zinc-300">
+                                <span className="font-medium text-zinc-100">
+                                  {s.title}
+                                </span>
+                                {s.artist ? (
+                                  <span className="text-zinc-500">
+                                    {' '}
+                                    · {s.artist}
+                                  </span>
+                                ) : null}
+                              </span>
+                              <span
+                                className={`shrink-0 rounded-full px-1.5 py-0.5 text-[10px] font-medium ${
+                                  s.status === 'playing'
+                                    ? 'bg-emerald-500/20 text-emerald-300'
+                                    : s.status === 'queued'
+                                      ? 'bg-sky-500/15 text-sky-300'
+                                      : s.status === 'skipped'
+                                        ? 'bg-amber-500/15 text-amber-300'
+                                        : 'bg-zinc-800 text-zinc-500'
+                                }`}
+                              >
+                                {s.status}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {bannedRows.length > 0 && (
+              <div className={`${cardClass} space-y-3`}>
+                <SectionHead
+                  title="Expulsados / bloqueados"
+                  desc="Pueden volver a pedir si los desbloqueas"
+                />
+                <div className="space-y-2">
+                  {bannedRows.map((b) => (
+                    <div
+                      key={b.id}
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-red-100">
+                          {b.label}
+                        </p>
+                        <p className="text-[11px] text-zinc-500">
+                          {b.reason || 'Expulsado'}
+                          {' · '}
+                          {new Date(b.bannedAt).toLocaleString()}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={kickBusy === b.id}
+                        onClick={() => void unbanClient(b.id)}
+                        className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs font-semibold text-zinc-200 hover:border-emerald-600 hover:text-emerald-300 disabled:opacity-50"
+                      >
+                        Desbloquear
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+          </section>
         )}
 
         {/* ——— QR ——— */}

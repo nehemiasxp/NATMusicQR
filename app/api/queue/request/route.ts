@@ -4,6 +4,7 @@ import { checkVenueAccess } from '@/lib/access'
 import { checkRequestRateLimits, getClientIp } from '@/lib/rate-limit'
 import { getRuntimeConfig } from '@/lib/settings'
 import { isSuperMesa } from '@/lib/super-mesa'
+import { isBanned, loadBanned } from '@/lib/banned-clients'
 import { getYoutubeApiKey, validateYoutubeVideo } from '@/lib/youtube'
 
 function getSupabase() {
@@ -73,6 +74,29 @@ export async function POST(request: NextRequest) {
       { error: venueError?.message || 'Local no encontrado' },
       { status: 404 }
     )
+  }
+
+  // Expulsados: no pueden pedir
+  if (!isSuperMesa(tableName)) {
+    try {
+      const banStore = await loadBanned(supabase)
+      const ban = isBanned(banStore, {
+        deviceId,
+        tableLabel: tableName,
+      })
+      if (ban) {
+        return NextResponse.json(
+          {
+            error:
+              'Fuiste expulsado del jukebox. Habla con el personal del local.',
+            code: 'BANNED',
+          },
+          { status: 403 }
+        )
+      }
+    } catch {
+      /* si falla ban store, no bloquear el local */
+    }
   }
 
   // Mesa i9: sin cuotas (super poderes)
