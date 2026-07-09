@@ -45,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.8'
+export const JOIN_UI_VERSION = '2.1.9'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -790,35 +790,40 @@ export default function JoinPage() {
                 </div>
               </div>
 
-              {/* Votos: pedidos + autoplay — elemento destacado */}
+              {/* Votos: manito a la izquierda del texto, proporciones equilibradas */}
               {rules?.voting?.enabled !== false && (
                 <div className="border-t border-white/10 pt-4">
-                  <p className="mb-3 text-center text-xs font-semibold uppercase tracking-[0.14em] text-emerald-400/90">
+                  <p className="mb-3 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-emerald-400/90">
                     {playing.added_by_table?.includes('Autoplay')
                       ? '¿Te gusta el autoplay?'
                       : '¿Qué te parece esta canción?'}
                   </p>
 
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-2 gap-2.5 sm:gap-3">
                     <button
                       type="button"
                       disabled={voteBusy || !playing.id}
                       onClick={() => castVote('up')}
-                      className={`flex min-h-[4.25rem] flex-col items-center justify-center gap-0.5 rounded-2xl border-2 transition active:scale-[0.98] disabled:opacity-50 ${
+                      className={`flex min-h-[3.5rem] items-center gap-2.5 rounded-2xl border-2 px-3 py-2.5 text-left transition active:scale-[0.98] disabled:opacity-50 sm:min-h-[3.75rem] sm:gap-3 sm:px-4 ${
                         myVote === 'up'
-                          ? 'border-emerald-400 bg-emerald-500 text-white shadow-lg shadow-emerald-950/50'
-                          : 'border-emerald-700/40 bg-zinc-900/90 text-zinc-100 hover:border-emerald-500/70 hover:bg-emerald-950/50'
+                          ? 'border-emerald-400 bg-emerald-500 text-white shadow-lg shadow-emerald-950/40'
+                          : 'border-emerald-800/50 bg-zinc-900/90 text-zinc-100 hover:border-emerald-500/60 hover:bg-emerald-950/40'
                       }`}
                       aria-label="Me gusta"
                     >
-                      <span className="text-3xl leading-none sm:text-4xl">
+                      <span
+                        className="shrink-0 text-[1.75rem] leading-none sm:text-[2rem]"
+                        aria-hidden
+                      >
                         👍
                       </span>
-                      <span className="text-sm font-bold tracking-tight sm:text-base">
-                        Me gusta
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-bold leading-tight tracking-tight sm:text-[15px]">
+                          Me gusta
+                        </span>
                       </span>
                       <span
-                        className={`text-lg font-bold tabular-nums sm:text-xl ${
+                        className={`shrink-0 text-xl font-bold tabular-nums leading-none sm:text-2xl ${
                           myVote === 'up' ? 'text-white' : 'text-emerald-400'
                         }`}
                       >
@@ -830,21 +835,26 @@ export default function JoinPage() {
                       type="button"
                       disabled={voteBusy || !playing.id}
                       onClick={() => castVote('down')}
-                      className={`flex min-h-[4.25rem] flex-col items-center justify-center gap-0.5 rounded-2xl border-2 transition active:scale-[0.98] disabled:opacity-50 ${
+                      className={`flex min-h-[3.5rem] items-center gap-2.5 rounded-2xl border-2 px-3 py-2.5 text-left transition active:scale-[0.98] disabled:opacity-50 sm:min-h-[3.75rem] sm:gap-3 sm:px-4 ${
                         myVote === 'down'
-                          ? 'border-red-400 bg-red-600 text-white shadow-lg shadow-red-950/50'
-                          : 'border-red-800/40 bg-zinc-900/90 text-zinc-100 hover:border-red-500/70 hover:bg-red-950/40'
+                          ? 'border-red-400 bg-red-600 text-white shadow-lg shadow-red-950/40'
+                          : 'border-red-900/45 bg-zinc-900/90 text-zinc-100 hover:border-red-500/60 hover:bg-red-950/35'
                       }`}
                       aria-label="No me gusta"
                     >
-                      <span className="text-3xl leading-none sm:text-4xl">
+                      <span
+                        className="shrink-0 text-[1.75rem] leading-none sm:text-[2rem]"
+                        aria-hidden
+                      >
                         👎
                       </span>
-                      <span className="text-sm font-bold tracking-tight sm:text-base">
-                        No me gusta
+                      <span className="min-w-0 flex-1">
+                        <span className="block text-[13px] font-bold leading-tight tracking-tight sm:text-[15px]">
+                          No me gusta
+                        </span>
                       </span>
                       <span
-                        className={`text-lg font-bold tabular-nums sm:text-xl ${
+                        className={`shrink-0 text-xl font-bold tabular-nums leading-none sm:text-2xl ${
                           myVote === 'down' ? 'text-white' : 'text-red-400'
                         }`}
                       >
@@ -853,16 +863,14 @@ export default function JoinPage() {
                     </button>
                   </div>
 
-                  <p className="mt-3 truncate text-center text-[11px] font-medium leading-none tracking-tight text-zinc-400 sm:text-xs">
-                    {[
-                      rules?.voting?.upCancelsDown !== false
-                        ? '👍 cancela 👎'
-                        : null,
-                      `Salta si 👎 ≥ ${rules?.voting?.skipThresholdPercent ?? 80}%`,
-                      `mín. ${rules?.voting?.minVotesToSkip ?? 2} votos`,
-                    ]
-                      .filter(Boolean)
-                      .join('  ·  ')}
+                  <p className="mt-2.5 whitespace-nowrap text-center text-[11px] font-medium leading-none text-zinc-400 sm:text-xs">
+                    {rules?.voting?.upCancelsDown !== false
+                      ? '👍 cancela 👎'
+                      : 'Votos de la sala'}
+                    {' · '}
+                    Salta si rechazo ≥ {rules?.voting?.skipThresholdPercent ?? 80}%
+                    {' · '}
+                    mín. {rules?.voting?.minVotesToSkip ?? 2} votos
                   </p>
                 </div>
               )}
