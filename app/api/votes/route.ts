@@ -122,17 +122,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: 'Local no encontrado' }, { status: 404 })
   }
 
-  // Solo se vota la canción que está playing
+  // Cualquier canción en playing: pedidos de mesa O autoplay del catálogo
   const { data: item } = await supabase
     .from('queue_items')
-    .select('id, status, venue_id')
+    .select('id, status, venue_id, added_by_table')
     .eq('id', queueItemId)
     .eq('venue_id', venue.id)
     .maybeSingle()
 
   if (!item || item.status !== 'playing') {
     return NextResponse.json(
-      { error: 'Solo se puede votar la canción en reproducción' },
+      {
+        error:
+          'Solo se puede votar la canción en reproducción (pedidos o autoplay)',
+      },
       { status: 400 }
     )
   }

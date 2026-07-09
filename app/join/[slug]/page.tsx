@@ -45,7 +45,7 @@ type SearchItem = {
 }
 
 /** v2.1 — 3 pestañas: En cola | Local | +Añadir música */
-export const JOIN_UI_VERSION = '2.1.4'
+export const JOIN_UI_VERSION = '2.1.5'
 
 type Tab = 'queue' | 'local' | 'add'
 
@@ -273,7 +273,12 @@ export default function JoinPage() {
   }, [playing?.id, rules?.voting?.enabled, deviceId])
 
   async function castVote(vote: 'up' | 'down') {
+    // Votos válidos para pedidos de mesa Y para autoplay del catálogo
     if (!slug || !session || !playing?.id || !deviceId || voteBusy) return
+    if (playing.status !== 'playing') {
+      setMessage('Solo puedes votar la canción que está sonando ahora')
+      return
+    }
     setVoteBusy(true)
     try {
       const res = await fetch('/api/votes', {
@@ -284,17 +289,20 @@ export default function JoinPage() {
           queueItemId: playing.id,
           deviceId,
           vote,
-          accessPin: session.accessPin || undefined,
+          accessPin: session.accessPin || pinInput.trim() || undefined,
         }),
       })
       const data = await res.json()
       if (!res.ok) {
-        setMessage(data.error || 'No se pudo votar')
+        setMessage(data.error || data.hint || 'No se pudo votar')
         return
       }
       setVoteUp(data.up ?? 0)
       setVoteDown(data.down ?? 0)
       setMyVote(data.myVote ?? vote)
+      if (data.shouldSkip) {
+        setMessage('La sala rechazó el tema… la TV bajará el volumen y cambiará')
+      }
     } catch {
       setMessage('Error de red al votar')
     } finally {
@@ -688,47 +696,57 @@ export default function JoinPage() {
                 </div>
               </div>
 
-              {rules?.voting?.enabled && (
-                <div className="flex items-center justify-between gap-3 border-t border-white/5 pt-3">
-                  <div className="flex gap-2">
-                    <button
-                      type="button"
-                      disabled={voteBusy}
-                      onClick={() => castVote('up')}
-                      className={`rounded-full px-3.5 py-1.5 text-base transition ${
-                        myVote === 'up'
-                          ? 'bg-emerald-600 text-white'
-                          : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
-                      }`}
-                      aria-label="Me gusta"
-                    >
-                      👍{' '}
-                      <span className="ml-0.5 text-sm font-medium">{voteUp}</span>
-                    </button>
-                    <button
-                      type="button"
-                      disabled={voteBusy}
-                      onClick={() => castVote('down')}
-                      className={`rounded-full px-3.5 py-1.5 text-base transition ${
-                        myVote === 'down'
-                          ? 'bg-red-600 text-white'
-                          : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
-                      }`}
-                      aria-label="No me gusta"
-                    >
-                      👎{' '}
-                      <span className="ml-0.5 text-sm font-medium">
-                        {voteDown}
-                      </span>
-                    </button>
-                  </div>
-                  <p className="max-w-[9rem] text-right text-[10px] leading-snug text-zinc-500">
-                    {rules.voting.upCancelsDown !== false
-                      ? '👍 cancela 👎 · '
-                      : ''}
-                    👎 ≥ {rules.voting.skipThresholdPercent}% (mín.{' '}
-                    {rules.voting.minVotesToSkip}) salta
+              {/* Votos: pedidos de usuarios Y canciones de autoplay */}
+              {rules?.voting?.enabled !== false && (
+                <div className="space-y-2 border-t border-white/5 pt-3">
+                  <p className="text-[10px] font-medium uppercase tracking-wide text-zinc-500">
+                    {playing.added_by_table?.includes('Autoplay')
+                      ? 'Votar autoplay (también cuenta)'
+                      : 'Votar esta canción'}
                   </p>
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="flex gap-2">
+                      <button
+                        type="button"
+                        disabled={voteBusy || !playing.id}
+                        onClick={() => castVote('up')}
+                        className={`rounded-full px-3.5 py-1.5 text-base transition ${
+                          myVote === 'up'
+                            ? 'bg-emerald-600 text-white'
+                            : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
+                        }`}
+                        aria-label="Me gusta"
+                      >
+                        👍{' '}
+                        <span className="ml-0.5 text-sm font-medium">
+                          {voteUp}
+                        </span>
+                      </button>
+                      <button
+                        type="button"
+                        disabled={voteBusy || !playing.id}
+                        onClick={() => castVote('down')}
+                        className={`rounded-full px-3.5 py-1.5 text-base transition ${
+                          myVote === 'down'
+                            ? 'bg-red-600 text-white'
+                            : 'bg-zinc-800 text-zinc-200 hover:bg-zinc-700'
+                        }`}
+                        aria-label="No me gusta"
+                      >
+                        👎{' '}
+                        <span className="ml-0.5 text-sm font-medium">
+                          {voteDown}
+                        </span>
+                      </button>
+                    </div>
+                    <p className="max-w-[9rem] text-right text-[10px] leading-snug text-zinc-500">
+                      {rules?.voting?.upCancelsDown !== false
+                        ? '👍 cancela 👎 · '
+                        : ''}
+                      👎 ≥ {rules?.voting?.skipThresholdPercent ?? 80}% (mín.{' '}
+                      {rules?.voting?.minVotesToSkip ?? 2}) salta
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

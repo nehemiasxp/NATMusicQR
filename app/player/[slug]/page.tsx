@@ -9,7 +9,7 @@ import type { QueueItem, Venue } from '@/lib/types'
 
 const POLL_MS = 3000
 /** Versión player (fade votos) */
-export const PLAYER_UI_VERSION = '2.1.3'
+export const PLAYER_UI_VERSION = '2.1.5'
 
 type RuntimeFlags = {
   autoplayEnabled: boolean
@@ -213,23 +213,35 @@ export default function PlayerPage() {
     [finishAdvance]
   )
 
-  // Poll votos → fade suave, no corte brusco
+  // Poll votos (pedidos + autoplay) → fade suave y salto
   useEffect(() => {
-    if (!playingItem?.id || !flagsRef.current.votingEnabled) {
+    if (!playingItem?.id) {
       setVoteStats(null)
       return
     }
 
     let cancelled = false
     const itemId = playingItem.id
+    const isAuto =
+      playingItem.added_by_table?.includes('Autoplay') ?? false
 
     async function checkVotes() {
+      // Releer flag por si se activó en admin a mitad de tema
+      if (!flagsRef.current.votingEnabled) {
+        setVoteStats(null)
+        return
+      }
       try {
         const res = await fetch(
-          `/api/votes?queueItemId=${encodeURIComponent(itemId)}`
+          `/api/votes?queueItemId=${encodeURIComponent(itemId)}`,
+          { cache: 'no-store' }
         )
         const data = await res.json()
         if (cancelled || !res.ok) return
+        if (data.enabled === false) {
+          setVoteStats(null)
+          return
+        }
         setVoteStats({
           up: data.up ?? 0,
           down: data.down ?? 0,
@@ -240,7 +252,11 @@ export default function PlayerPage() {
           !advancingRef.current &&
           fadeOutKey !== itemId
         ) {
-          setPlayerNote('La sala pidió cambio… bajando volumen')
+          setPlayerNote(
+            isAuto
+              ? 'Autoplay rechazado por la sala… bajando volumen'
+              : 'La sala pidió cambio… bajando volumen'
+          )
           setFadeOutKey(itemId)
         }
       } catch {
@@ -254,7 +270,7 @@ export default function PlayerPage() {
       cancelled = true
       clearInterval(t)
     }
-  }, [playingItem?.id, fadeOutKey])
+  }, [playingItem?.id, playingItem?.added_by_table, fadeOutKey])
 
   useEffect(() => {
     if (!slug) return
@@ -459,14 +475,16 @@ export default function PlayerPage() {
               </div>
               {voteStats && (
                 <div className="text-right text-sm">
-                  <p className="text-zinc-400">Votos mesas</p>
-                  <p className="text-lg mt-1">
+                  <p className="text-zinc-400">
+                    Votos{isAutoplay ? ' · autoplay' : ' · mesa'}
+                  </p>
+                  <p className="mt-1 text-lg">
                     <span className="text-emerald-400">👍 {voteStats.up}</span>
                     {'  '}
                     <span className="text-red-400">👎 {voteStats.down}</span>
                   </p>
-                  <p className="text-xs text-zinc-500 mt-1">
-                    {voteStats.downPercent}% no me gusta
+                  <p className="mt-1 text-xs text-zinc-500">
+                    {voteStats.downPercent}% rechazo (también en autoplay)
                   </p>
                 </div>
               )}
