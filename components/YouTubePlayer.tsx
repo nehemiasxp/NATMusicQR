@@ -191,12 +191,12 @@ export default function YouTubePlayer({
     setIosMode(ios.current)
   }, [])
 
-  function fadeOutMs() {
+  function getFadeOutDuration() {
     if (crossfadeMs != null) return crossfadeMs
     return ios.current ? IOS_FADE_OUT_MS : DESKTOP_FADE_OUT_MS
   }
 
-  function fadeInMs() {
+  function getFadeInDuration() {
     return ios.current ? IOS_FADE_IN_MS : DESKTOP_FADE_IN_MS
   }
 
@@ -300,7 +300,7 @@ export default function YouTubePlayer({
     const p = playerRef.current
     if (!p) return
 
-    const ms = fadeInMs()
+    const ms = getFadeInDuration()
 
     try {
       // iOS: mantener estado de unlock; no re-mute si ya desbloqueó
@@ -384,7 +384,7 @@ export default function YouTubePlayer({
           toVol: 0,
           fromOp: 1,
           toOp: 0.08,
-          ms: fadeOutMs(),
+          ms: getFadeOutDuration(),
           ease: easeInCubic,
           label: 'Bajando…',
           onDone: () => {
@@ -456,7 +456,7 @@ export default function YouTubePlayer({
         toVol: 0,
         fromOp: 1,
         toOp: 0.05,
-        ms: fadeOutMs(),
+        ms: getFadeOutDuration(),
         ease: easeInCubic,
         label: ios.current ? 'Mezclando (iOS)…' : 'Mezclando…',
         onDone: () => {
