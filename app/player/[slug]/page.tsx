@@ -601,7 +601,8 @@ export default function PlayerPage() {
                 fadeOutKey === playingItem?.id ? fadeOutKey : null
               }
               fadeOutMs={4200}
-              crossfadeMs={1600}
+              /* Desktop usa vol+visual; iOS ignora vol y usa fade visual largo */
+              crossfadeMs={undefined}
             />
             {slug && (
               <LiveFeedOverlay

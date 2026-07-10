@@ -1,10 +1,16 @@
 'use client'
 
 /**
- * YouTube IFrame API — un solo player estilo playlist + fade DJ.
- * - Un iframe persistente (loadVideoById)
- * - Cualquier cambio de tema: fade-out → carga → fade-in
- * - iOS: playsinline + mute inicial + gesto
+ * YouTube IFrame API — playlist + fade DJ, compatible iOS Safari 2025–2026.
+ *
+ * iOS limita setVolume() en embeds (a menudo no hace nada). Estrategia:
+ * - Siempre: fade VISUAL (opacidad CSS) — funciona en todos los navegadores
+ * - Desktop: además fade de volumen vía setVolume
+ * - iOS: no confiar en setVolume; transición en negro + loadVideoById
+ * - Nunca destroy/remount al cambiar tema (rompe el gesto iOS)
+ * - playsinline + mute inicial + un solo unlock por gesto
+ *
+ * https://developers.google.com/youtube/iframe_api_reference
  */
 
 import { useEffect, useRef, useState } from 'react'
@@ -43,10 +49,8 @@ type Props = {
   onEnded: () => void
   onFadeComplete?: () => void
   onError?: (code: number) => void
-  /** Señal externa (votos): fade y luego onFadeComplete */
   fadeOutKey?: string | number | null
   fadeOutMs?: number
-  /** Duración del fade al cambiar de tema (DJ) */
   crossfadeMs?: number
   nextVideoId?: string | null
 }
@@ -56,12 +60,28 @@ const YT_PLAYING = 1
 const YT_PAUSED = 2
 const YT_CUED = 5
 
-/** Fade por defecto tipo DJ (ms) */
-const DEFAULT_FADE_OUT_MS = 1600
-const DEFAULT_FADE_IN_MS = 1400
+/** Desktop: volumen + visual */
+const DESKTOP_FADE_OUT_MS = 1600
+const DESKTOP_FADE_IN_MS = 1400
+/** iOS: solo visual (más largo = más “DJ”) */
+const IOS_FADE_OUT_MS = 1800
+const IOS_FADE_IN_MS = 1600
+const IOS_BLACK_HOLD_MS = 220
 const DEFAULT_VOTE_FADE_MS = 4200
 
 let apiPromise: Promise<void> | null = null
+
+function isIOSDevice(): boolean {
+  if (typeof navigator === 'undefined') return false
+  const ua = navigator.userAgent || ''
+  // iPhone / iPod / iPad clásico
+  if (/iPad|iPhone|iPod/.test(ua)) return true
+  // iPadOS “desktop” UA (Mac + touch)
+  if (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1) {
+    return true
+  }
+  return false
+}
 
 function ensureYouTubeApi(): Promise<void> {
   if (typeof window === 'undefined') return Promise.resolve()
@@ -126,8 +146,12 @@ export default function YouTubePlayer({
   onError,
   fadeOutKey = null,
   fadeOutMs = DEFAULT_VOTE_FADE_MS,
-  crossfadeMs = DEFAULT_FADE_OUT_MS,
+  crossfadeMs,
 }: Props) {
+  const ios = useRef(false)
+  const volumeWorksRef = useRef(false)
+  const volumeProbedRef = useRef(false)
+
   const wrapRef = useRef<HTMLDivElement | null>(null)
   const hostRef = useRef<HTMLDivElement | null>(null)
   const playerRef = useRef<YTPlayer | null>(null)
@@ -158,8 +182,23 @@ export default function YouTubePlayer({
   const [idle, setIdle] = useState(!videoId)
   const [status, setStatus] = useState<string | null>(null)
   const [visualOpacity, setVisualOpacity] = useState(1)
+  const [iosMode, setIosMode] = useState(false)
 
   desiredRef.current = videoId?.trim() || null
+
+  useEffect(() => {
+    ios.current = isIOSDevice()
+    setIosMode(ios.current)
+  }, [])
+
+  function fadeOutMs() {
+    if (crossfadeMs != null) return crossfadeMs
+    return ios.current ? IOS_FADE_OUT_MS : DESKTOP_FADE_OUT_MS
+  }
+
+  function fadeInMs() {
+    return ios.current ? IOS_FADE_IN_MS : DESKTOP_FADE_IN_MS
+  }
 
   function cancelFade() {
     if (fadeRaf.current != null) {
@@ -168,7 +207,28 @@ export default function YouTubePlayer({
     }
   }
 
-  function setVol(p: YTPlayer, v: number) {
+  /** Prueba si setVolume realmente mueve el volumen (en iOS suele fallar) */
+  function probeVolume(p: YTPlayer) {
+    if (volumeProbedRef.current) return
+    volumeProbedRef.current = true
+    if (ios.current) {
+      // En iOS casi nunca controla el hardware; no confiar
+      volumeWorksRef.current = false
+      return
+    }
+    try {
+      const before = p.getVolume()
+      p.setVolume(before > 50 ? 30 : 70)
+      const after = p.getVolume()
+      p.setVolume(typeof before === 'number' ? before : 100)
+      volumeWorksRef.current = Math.abs(after - (before > 50 ? 30 : 70)) < 15
+    } catch {
+      volumeWorksRef.current = false
+    }
+  }
+
+  function setVolSafe(p: YTPlayer, v: number) {
+    if (!volumeWorksRef.current && ios.current) return
     try {
       p.setVolume(Math.max(0, Math.min(100, Math.round(v))))
     } catch {
@@ -178,52 +238,56 @@ export default function YouTubePlayer({
 
   function restoreAudio(p: YTPlayer) {
     try {
-      p.unMute()
-      p.setVolume(100)
-      unlockedRef.current = true
+      if (unlockedRef.current) {
+        p.unMute()
+        if (volumeWorksRef.current) p.setVolume(100)
+      }
       setNeedsGesture(false)
     } catch {
       /* iOS */
     }
   }
 
-  /** Fade de volumen + opacidad visual */
-  function runVolumeFade(opts: {
-    from: number
-    to: number
+  /**
+   * Animación principal: siempre visual.
+   * Volumen solo si el API responde (desktop).
+   */
+  function runDjFade(opts: {
+    fromVol: number
+    toVol: number
+    fromOp: number
+    toOp: number
     ms: number
     ease: (t: number) => number
     label: string
     onDone: () => void
   }) {
     const p = playerRef.current
-    if (!p) {
-      opts.onDone()
-      return
-    }
-
     cancelFade()
     fadingRef.current = true
     setFading(true)
     setFadeLabel(opts.label)
     setFadeProgress(0)
 
+    const useVol = Boolean(p && volumeWorksRef.current && unlockedRef.current)
     const t0 = performance.now()
+
     const tick = (now: number) => {
       const raw = Math.min(1, (now - t0) / opts.ms)
       const e = opts.ease(raw)
-      const vol = opts.from + (opts.to - opts.from) * e
-      setVol(p, vol)
-      // opacidad visual sigue el volumen (0.2 mínimo para no “pantalla negra total”)
-      const op = 0.2 + 0.8 * (vol / 100)
+      const op = opts.fromOp + (opts.toOp - opts.fromOp) * e
       setVisualOpacity(op)
+      if (useVol && p) {
+        const vol = opts.fromVol + (opts.toVol - opts.fromVol) * e
+        setVolSafe(p, vol)
+      }
       setFadeProgress(Math.round(raw * 100))
       if (raw < 1) {
         fadeRaf.current = requestAnimationFrame(tick)
         return
       }
-      setVol(p, opts.to)
-      setVisualOpacity(opts.to <= 0 ? 0.15 : 1)
+      setVisualOpacity(opts.toOp)
+      if (useVol && p) setVolSafe(p, opts.toVol)
       fadingRef.current = false
       setFading(false)
       setFadeProgress(0)
@@ -232,37 +296,39 @@ export default function YouTubePlayer({
     fadeRaf.current = requestAnimationFrame(tick)
   }
 
-  function startFadeIn(ms = DEFAULT_FADE_IN_MS) {
+  function startFadeIn() {
     const p = playerRef.current
     if (!p) return
+
+    const ms = fadeInMs()
+
     try {
+      // iOS: mantener estado de unlock; no re-mute si ya desbloqueó
       if (unlockedRef.current) {
         p.unMute()
+        if (volumeWorksRef.current) p.setVolume(0)
       } else {
         p.mute()
       }
-      p.setVolume(0)
       p.playVideo()
     } catch {
       setNeedsGesture(true)
-      return
-    }
-
-    if (!unlockedRef.current) {
-      // iOS aún muteado: no hay fade de audio útil
       setVisualOpacity(1)
       return
     }
 
-    runVolumeFade({
-      from: 0,
-      to: 100,
+    // Fade-in visual siempre; volumen solo si funciona
+    runDjFade({
+      fromVol: 0,
+      toVol: 100,
+      fromOp: Math.min(visualOpacity, 0.2),
+      toOp: 1,
       ms,
       ease: easeOutCubic,
-      label: 'Subiendo…',
+      label: ios.current ? 'Entrando…' : 'Subiendo…',
       onDone: () => {
         setVisualOpacity(1)
-        restoreAudio(p)
+        if (unlockedRef.current) restoreAudio(p)
       },
     })
   }
@@ -270,12 +336,17 @@ export default function YouTubePlayer({
   function doLoadVideo(id: string) {
     const p = playerRef.current
     if (!p) return
-    ignoreEndedUntil.current = Date.now() + 1800
+    ignoreEndedUntil.current = Date.now() + 2000
     finishedRef.current = false
     awaitFadeInRef.current = true
     try {
-      p.mute()
-      p.setVolume(0)
+      // iOS: no stopVideo; loadVideoById mantiene el iframe/sesión
+      if (!unlockedRef.current) {
+        p.mute()
+      } else if (volumeWorksRef.current) {
+        p.setVolume(0)
+      }
+      // En iOS sin volume API: el negro visual ya cubre el corte de audio
       p.loadVideoById({ videoId: id, startSeconds: 0 })
       loadedRef.current = id
       window.setTimeout(() => {
@@ -283,19 +354,17 @@ export default function YouTubePlayer({
           p.playVideo()
         } catch {
           setNeedsGesture(true)
+          awaitFadeInRef.current = false
         }
-      }, 80)
+      }, ios.current ? 120 : 60)
     } catch (e) {
       awaitFadeInRef.current = false
       setStatus(e instanceof Error ? e.message : 'Error al cargar video')
       setNeedsGesture(true)
+      setVisualOpacity(1)
     }
   }
 
-  /**
-   * Cambia de tema con fade DJ si hay algo sonando.
-   * Si ya está en silencio / terminó → carga + fade-in.
-   */
   function playOrLoad(id: string | null) {
     const p = playerRef.current
     if (!p || !readyRef.current) return
@@ -303,30 +372,25 @@ export default function YouTubePlayer({
     if (!id) {
       pendingIdRef.current = null
       setIdle(true)
-      // fade out y pausa
       let state = -1
       try {
         state = p.getPlayerState()
       } catch {
         /* ignore */
       }
-      if (state === YT_PLAYING && unlockedRef.current) {
-        runVolumeFade({
-          from: (() => {
-            try {
-              return p.getVolume() || 100
-            } catch {
-              return 100
-            }
-          })(),
-          to: 0,
-          ms: crossfadeMs,
+      if (state === YT_PLAYING || state === 3) {
+        runDjFade({
+          fromVol: 100,
+          toVol: 0,
+          fromOp: 1,
+          toOp: 0.08,
+          ms: fadeOutMs(),
           ease: easeInCubic,
           label: 'Bajando…',
           onDone: () => {
             try {
               p.pauseVideo()
-              p.mute()
+              if (!ios.current) p.mute()
             } catch {
               /* ignore */
             }
@@ -335,7 +399,6 @@ export default function YouTubePlayer({
       } else {
         try {
           p.pauseVideo()
-          p.mute()
         } catch {
           /* ignore */
         }
@@ -352,7 +415,6 @@ export default function YouTubePlayer({
     if (same) {
       pendingIdRef.current = null
       if (unlockedRef.current) restoreAudio(p)
-      else p.mute()
       try {
         p.playVideo()
       } catch {
@@ -362,7 +424,6 @@ export default function YouTubePlayer({
       return
     }
 
-    // Si ya hay una transición en curso hacia otro id, solo actualiza destino
     if (fadingRef.current) {
       pendingIdRef.current = id
       return
@@ -375,70 +436,77 @@ export default function YouTubePlayer({
       state = -1
     }
 
-    // PLAYING=1, BUFFERING=3
     const isPlayingNow = state === YT_PLAYING || state === 3
 
-    if (isPlayingNow && loadedRef.current && unlockedRef.current) {
-      // DJ: bajar → cargar → subir
+    if (isPlayingNow && loadedRef.current) {
+      // Transición DJ: fade out visual (+ vol si se puede) → negro → load → fade in
       pendingIdRef.current = id
       let startVol = 100
       try {
-        const g = p.getVolume()
-        if (typeof g === 'number' && g > 0) startVol = g
+        if (volumeWorksRef.current) {
+          const g = p.getVolume()
+          if (typeof g === 'number' && g > 0) startVol = g
+        }
       } catch {
         startVol = 100
       }
 
-      runVolumeFade({
-        from: startVol,
-        to: 0,
-        ms: crossfadeMs,
+      runDjFade({
+        fromVol: startVol,
+        toVol: 0,
+        fromOp: 1,
+        toOp: 0.05,
+        ms: fadeOutMs(),
         ease: easeInCubic,
-        label: 'Mezclando…',
+        label: ios.current ? 'Mezclando (iOS)…' : 'Mezclando…',
         onDone: () => {
           const target = pendingIdRef.current || id
           pendingIdRef.current = null
-          try {
-            p.pauseVideo()
-          } catch {
-            /* ignore */
-          }
-          doLoadVideo(target)
-          // fade-in se dispara en onStateChange PLAYING (awaitFadeInRef)
+          // Hold en negro (iOS: da tiempo a cargar el siguiente sin flash)
+          window.setTimeout(
+            () => {
+              doLoadVideo(target)
+            },
+            ios.current ? IOS_BLACK_HOLD_MS : 80
+          )
         },
       })
       return
     }
 
-    // Sin audio activo (fin natural, primer tema, etc.): carga + fade-in
+    // Primer tema / ya en silencio / ended
     pendingIdRef.current = null
+    setVisualOpacity(0.15)
     doLoadVideo(id)
   }
 
-  /** Fade externo (votos): solo baja y avisa al padre */
   function startExternalFadeOut(ms: number) {
     const p = playerRef.current
     if (!p || fadingRef.current) return
 
     let startVol = 100
     try {
-      const g = p.getVolume()
-      if (typeof g === 'number' && g > 0) startVol = g
-      p.unMute()
+      if (volumeWorksRef.current) {
+        const g = p.getVolume()
+        if (typeof g === 'number' && g > 0) startVol = g
+      }
+      if (unlockedRef.current) p.unMute()
       p.playVideo()
     } catch {
       startVol = 100
     }
 
-    runVolumeFade({
-      from: startVol,
-      to: 0,
-      ms,
+    runDjFade({
+      fromVol: startVol,
+      toVol: 0,
+      fromOp: 1,
+      toOp: 0.05,
+      ms: ios.current ? Math.max(ms, IOS_FADE_OUT_MS) : ms,
       ease: easeInCubic,
       label: 'La sala pidió cambio…',
       onDone: () => {
         try {
-          p.mute()
+          // iOS: pause es más seguro que stopVideo
           p.pauseVideo()
         } catch {
           /* ignore */
@@ -474,6 +542,9 @@ export default function YouTubePlayer({
       const host = document.createElement('div')
       host.style.width = '100%'
       host.style.height = '100%'
+      // Ayuda a Safari a no forzar fullscreen nativo del video
+      host.setAttribute('playsinline', 'true')
+      host.setAttribute('webkit-playsinline', 'true')
       wrap.appendChild(host)
       hostRef.current = host
 
@@ -486,7 +557,9 @@ export default function YouTubePlayer({
           controls: 1,
           rel: 0,
           modestbranding: 1,
+          // Crítico iOS / iPadOS
           playsinline: 1,
+          // Autoplay inicial solo con mute (política Safari)
           mute: 1,
           fs: 0,
           enablejsapi: 1,
@@ -498,9 +571,10 @@ export default function YouTubePlayer({
             playerRef.current = event.target
             creatingRef.current = false
             loadedRef.current = firstId
+            probeVolume(event.target)
             try {
               event.target.mute()
-              event.target.setVolume(0)
+              if (volumeWorksRef.current) event.target.setVolume(0)
             } catch {
               /* ignore */
             }
@@ -515,6 +589,7 @@ export default function YouTubePlayer({
               } catch {
                 setNeedsGesture(true)
               }
+              // iOS a menudo necesita el gesto aunque autoplay mute
               window.setTimeout(() => {
                 try {
                   const st = event.target.getPlayerState()
@@ -524,7 +599,7 @@ export default function YouTubePlayer({
                 } catch {
                   setNeedsGesture(true)
                 }
-              }, 2200)
+              }, ios.current ? 2800 : 2200)
             } else {
               setIdle(true)
               try {
@@ -541,10 +616,11 @@ export default function YouTubePlayer({
               setStatus(null)
               const vid = readId(event.target)
               if (vid) loadedRef.current = vid
+              if (!volumeProbedRef.current) probeVolume(event.target)
 
               if (awaitFadeInRef.current) {
                 awaitFadeInRef.current = false
-                startFadeIn(DEFAULT_FADE_IN_MS)
+                startFadeIn()
               } else if (!fadingRef.current && unlockedRef.current) {
                 restoreAudio(event.target)
                 setVisualOpacity(1)
@@ -569,6 +645,7 @@ export default function YouTubePlayer({
               153: 'YouTube bloqueó el embed (Referer).',
             }
             setStatus(hints[code] || `Error YouTube (${code})`)
+            setVisualOpacity(1)
             onErrorRef.current?.(code)
           },
           onAutoplayBlocked: () => {
@@ -639,33 +716,45 @@ export default function YouTubePlayer({
     const p = playerRef.current
     if (!p) return
     try {
+      // Gesto de usuario: desbloquea audio en iOS (obligatorio Safari)
       unlockedRef.current = true
       p.unMute()
-      p.setVolume(100)
+      if (volumeWorksRef.current) p.setVolume(100)
       const want = desiredRef.current
       if (want) {
         if (loadedRef.current !== want) {
+          setVisualOpacity(0.1)
           doLoadVideo(want)
         } else {
           p.playVideo()
           setVisualOpacity(1)
         }
+      } else {
+        p.playVideo()
       }
       setNeedsGesture(false)
       setStatus(null)
     } catch {
-      setStatus('No se pudo iniciar. Vuelve a tocar.')
+      setStatus('No se pudo iniciar. Vuelve a tocar la pantalla.')
     }
   }
 
   return (
     <div className="relative h-full w-full overflow-hidden bg-black">
+      {/*
+        El iframe de YT vive aquí. La opacidad la controlamos nosotros
+        (fade visual = lo único 100% fiable en iOS).
+      */}
       <div
         ref={wrapRef}
-        className="absolute inset-0 h-full w-full"
+        className="absolute inset-0 h-full w-full will-change-[opacity]"
         style={{
           opacity: visualOpacity,
-          transition: fading ? 'none' : 'opacity 0.35s ease-out',
+          // En iOS preferimos RAF; sin transition CSS que pelee con RAF
+          transition: fading ? 'none' : 'opacity 0.25s ease-out',
+          // iOS: evita capas raras del compositor
+          WebkitTransform: 'translateZ(0)',
+          transform: 'translateZ(0)',
         }}
       />
 
@@ -689,14 +778,18 @@ export default function YouTubePlayer({
       )}
 
       {fading && (
-        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-end bg-gradient-to-t from-black via-black/50 to-transparent pb-10">
+        <div className="pointer-events-none absolute inset-0 z-10 flex flex-col items-center justify-end bg-gradient-to-t from-black via-black/55 to-transparent pb-10">
           <p className="text-sm font-medium tracking-wide text-zinc-100">
             {fadeLabel}
           </p>
-          <p className="mt-1 text-xs text-zinc-400">Transición suave · DJ mode</p>
+          <p className="mt-1 text-xs text-zinc-400">
+            {iosMode
+              ? 'Transición iOS · fade visual'
+              : 'Transición suave · DJ mode'}
+          </p>
           <div className="mt-3 h-1 w-44 overflow-hidden rounded-full bg-zinc-800">
             <div
-              className="h-full rounded-full bg-emerald-500 transition-[width] duration-75"
+              className="h-full rounded-full bg-emerald-500"
               style={{ width: `${fadeProgress}%` }}
             />
           </div>
@@ -709,8 +802,9 @@ export default function YouTubePlayer({
           onClick={handleUnlock}
           className="absolute inset-0 z-20 flex items-center justify-center bg-black/75 text-white"
         >
-          <span className="rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold shadow-lg hover:bg-emerald-500">
+          <span className="rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold shadow-lg hover:bg-emerald-500 active:scale-[0.98]">
             ▶ Toca para iniciar
+            {iosMode ? ' (iPhone / iPad)' : ''}
           </span>
         </button>
       )}
