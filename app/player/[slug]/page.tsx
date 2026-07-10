@@ -600,7 +600,8 @@ export default function PlayerPage() {
               fadeOutKey={
                 fadeOutKey === playingItem?.id ? fadeOutKey : null
               }
-              fadeOutMs={4500}
+              fadeOutMs={4200}
+              crossfadeMs={1600}
             />
             {slug && (
               <LiveFeedOverlay
