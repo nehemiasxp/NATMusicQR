@@ -550,7 +550,7 @@ export default function PlayerPage() {
             )}
             <div className="text-xs text-zinc-500">
               Autoplay: {autoplayOn ? 'ON' : 'OFF'} · TV v{PLAYER_UI_VERSION} ·
-              live
+              live · sin seek
             </div>
             {lastSync && (
               <div className="text-xs text-zinc-600">Sync {lastSync}</div>

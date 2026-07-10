@@ -40,6 +40,8 @@ type YTPlayer = {
   setVolume: (n: number) => void
   getVolume: () => number
   isMuted: () => boolean
+  getCurrentTime: () => number
+  seekTo: (seconds: number, allowSeekAhead: boolean) => void
   getVideoData?: () => { video_id?: string }
 }
 
@@ -167,6 +169,9 @@ export default function YouTubePlayer({
   const lastFadeKey = useRef<string | number | null>(null)
   const creatingRef = useRef(false)
   const awaitFadeInRef = useRef(false)
+  /** Anti-seek: último tiempo “legal” de reproducción */
+  const lastLegalTimeRef = useRef(0)
+  const seekGuardTimer = useRef<number | null>(null)
 
   const onEndedRef = useRef(onEnded)
   const onFadeCompleteRef = useRef(onFadeComplete)
@@ -376,6 +381,7 @@ export default function YouTubePlayer({
     ignoreEndedUntil.current = Date.now() + 2000
     finishedRef.current = false
     awaitFadeInRef.current = true
+    lastLegalTimeRef.current = 0
     try {
       // iOS: no bajar volumen a 0 (setVolume no se recupera bien)
       // Desktop: solo bajar si vamos a hacer fade-in de volumen
@@ -613,7 +619,10 @@ export default function YouTubePlayer({
         videoId: firstId,
         playerVars: {
           autoplay: 1,
-          controls: 1,
+          // Sin barra: no se puede adelantar/pausar desde la UI de YouTube
+          controls: 0,
+          // Sin atajos de teclado (flechas, J/L, etc.)
+          disablekb: 1,
           rel: 0,
           modestbranding: 1,
           // Crítico iOS / iPadOS
@@ -621,6 +630,8 @@ export default function YouTubePlayer({
           // Autoplay inicial solo con mute (política Safari)
           mute: 1,
           fs: 0,
+          iv_load_policy: 3,
+          cc_load_policy: 0,
           enablejsapi: 1,
           origin: window.location.origin,
         },
@@ -630,6 +641,7 @@ export default function YouTubePlayer({
             playerRef.current = event.target
             creatingRef.current = false
             loadedRef.current = firstId
+            lastLegalTimeRef.current = 0
             probeVolume(event.target)
             try {
               event.target.mute()
@@ -686,6 +698,24 @@ export default function YouTubePlayer({
                 setVisualOpacity(1)
               }
             }
+            // Si alguien pausa (atajo / menú nativo), reanudar en TV
+            if (event.data === YT_PAUSED && !fadingRef.current) {
+              if (Date.now() < ignoreEndedUntil.current) return
+              if (desiredRef.current && unlockedRef.current) {
+                window.setTimeout(() => {
+                  try {
+                    if (
+                      playerRef.current?.getPlayerState() === YT_PAUSED &&
+                      !fadingRef.current
+                    ) {
+                      playerRef.current.playVideo()
+                    }
+                  } catch {
+                    /* ignore */
+                  }
+                }, 200)
+              }
+            }
             if (event.data === YT_ENDED && !fadingRef.current) {
               if (Date.now() < ignoreEndedUntil.current) return
               if (finishedRef.current) return
@@ -724,6 +754,10 @@ export default function YouTubePlayer({
   useEffect(() => {
     return () => {
       cancelFade()
+      if (seekGuardTimer.current != null) {
+        window.clearInterval(seekGuardTimer.current)
+        seekGuardTimer.current = null
+      }
       readyRef.current = false
       if (playerRef.current) {
         try {
@@ -739,6 +773,48 @@ export default function YouTubePlayer({
         } catch {
           /* ignore */
         }
+      }
+    }
+  }, [])
+
+  /**
+   * Anti-adelantar: si el tiempo salta > 1.8s (scrub / teclas),
+   * volvemos al último punto legal. No afecta el avance natural.
+   */
+  useEffect(() => {
+    if (seekGuardTimer.current != null) {
+      window.clearInterval(seekGuardTimer.current)
+      seekGuardTimer.current = null
+    }
+
+    seekGuardTimer.current = window.setInterval(() => {
+      const p = playerRef.current
+      if (!p || !readyRef.current || fadingRef.current) return
+      if (Date.now() < ignoreEndedUntil.current) return
+      try {
+        const st = p.getPlayerState()
+        if (st !== YT_PLAYING && st !== 3) return
+        const t = p.getCurrentTime()
+        if (typeof t !== 'number' || Number.isNaN(t)) return
+        const last = lastLegalTimeRef.current
+        // Salto hacia adelante o atrás (más de ~1.8s): forzar posición
+        if (last > 0.5 && Math.abs(t - last) > 1.8) {
+          p.seekTo(last, true)
+          return
+        }
+        // Avance normal (~0.4s por poll)
+        if (t >= last - 0.25) {
+          lastLegalTimeRef.current = t
+        }
+      } catch {
+        /* ignore */
+      }
+    }, 400)
+
+    return () => {
+      if (seekGuardTimer.current != null) {
+        window.clearInterval(seekGuardTimer.current)
+        seekGuardTimer.current = null
       }
     }
   }, [])
@@ -803,30 +879,37 @@ export default function YouTubePlayer({
   }
 
   return (
-    <div className="relative h-full w-full overflow-hidden bg-black">
+    <div className="relative h-full w-full overflow-hidden bg-black select-none">
       {/*
-        El iframe de YT vive aquí. La opacidad la controlamos nosotros
-        (fade visual = lo único 100% fiable en iOS).
+        El iframe de YT vive aquí. pointer-events:none = no clics para
+        adelantar/pausar. Solo el botón de desbloqueo captura toques.
       */}
       <div
         ref={wrapRef}
-        className="absolute inset-0 h-full w-full will-change-[opacity]"
+        className="absolute inset-0 h-full w-full will-change-[opacity] pointer-events-none"
         style={{
           opacity: visualOpacity,
-          // En iOS preferimos RAF; sin transition CSS que pelee con RAF
           transition: fading ? 'none' : 'opacity 0.25s ease-out',
-          // iOS: evita capas raras del compositor
           WebkitTransform: 'translateZ(0)',
           transform: 'translateZ(0)',
         }}
       />
+
+      {/* Capa transparente que come clics (doble red anti-seek en desktop) */}
+      {!needsGesture && (
+        <div
+          className="absolute inset-0 z-[8] cursor-default"
+          aria-hidden
+          onContextMenu={(e) => e.preventDefault()}
+        />
+      )}
 
       {title ? (
         <span className="sr-only">Reproduciendo: {title}</span>
       ) : null}
 
       {status && (
-        <div className="absolute inset-x-0 top-0 z-[25] bg-red-950/90 px-4 py-2 text-center text-sm text-red-100">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-[25] bg-red-950/90 px-4 py-2 text-center text-sm text-red-100">
           {status}
         </div>
       )}
