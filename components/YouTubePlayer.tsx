@@ -228,7 +228,8 @@ export default function YouTubePlayer({
   }
 
   function setVolSafe(p: YTPlayer, v: number) {
-    if (!volumeWorksRef.current && ios.current) return
+    // En iOS setVolume no controla el hardware; no lo usamos para no dejar el player en 0
+    if (ios.current) return
     try {
       p.setVolume(Math.max(0, Math.min(100, Math.round(v))))
     } catch {
@@ -236,16 +237,26 @@ export default function YouTubePlayer({
     }
   }
 
-  function restoreAudio(p: YTPlayer) {
+  /** Siempre intenta volumen completo + unmute (evita quedar en 0) */
+  function forceFullVolume(p: YTPlayer) {
     try {
       if (unlockedRef.current) {
         p.unMute()
-        if (volumeWorksRef.current) p.setVolume(100)
+        // Intentar siempre (también si el probe falló)
+        try {
+          p.setVolume(100)
+        } catch {
+          /* ignore */
+        }
       }
       setNeedsGesture(false)
     } catch {
       /* iOS */
     }
+  }
+
+  function restoreAudio(p: YTPlayer) {
+    forceFullVolume(p)
   }
 
   /**
@@ -269,7 +280,10 @@ export default function YouTubePlayer({
     setFadeLabel(opts.label)
     setFadeProgress(0)
 
-    const useVol = Boolean(p && volumeWorksRef.current && unlockedRef.current)
+    // Solo animar volumen en desktop (iOS ignora setVolume y puede quedar en 0)
+    const useVol = Boolean(
+      p && !ios.current && volumeWorksRef.current && unlockedRef.current
+    )
     const t0 = performance.now()
 
     const tick = (now: number) => {
@@ -288,6 +302,10 @@ export default function YouTubePlayer({
       }
       setVisualOpacity(opts.toOp)
       if (useVol && p) setVolSafe(p, opts.toVol)
+      // Si el fade-in termina en 100, forzar audio
+      if (opts.toVol >= 100 && p && unlockedRef.current) {
+        forceFullVolume(p)
+      }
       fadingRef.current = false
       setFading(false)
       setFadeProgress(0)
@@ -303,10 +321,20 @@ export default function YouTubePlayer({
     const ms = getFadeInDuration()
 
     try {
-      // iOS: mantener estado de unlock; no re-mute si ya desbloqueó
+      // Nunca dejar mute si ya hubo gesto de usuario
       if (unlockedRef.current) {
         p.unMute()
-        if (volumeWorksRef.current) p.setVolume(0)
+        // Desktop: partir de 0 solo si el fade de volumen funciona
+        if (!ios.current && volumeWorksRef.current) {
+          p.setVolume(0)
+        } else {
+          // iOS / sin control de vol: volumen a tope desde el primer frame
+          try {
+            p.setVolume(100)
+          } catch {
+            /* ignore */
+          }
+        }
       } else {
         p.mute()
       }
@@ -314,23 +342,32 @@ export default function YouTubePlayer({
     } catch {
       setNeedsGesture(true)
       setVisualOpacity(1)
+      forceFullVolume(p)
       return
     }
 
-    // Fade-in visual siempre; volumen solo si funciona
+    // Fade-in visual siempre
     runDjFade({
-      fromVol: 0,
+      fromVol: !ios.current && volumeWorksRef.current ? 0 : 100,
       toVol: 100,
-      fromOp: Math.min(visualOpacity, 0.2),
+      fromOp: 0.12,
       toOp: 1,
       ms,
       ease: easeOutCubic,
       label: ios.current ? 'Entrando…' : 'Subiendo…',
       onDone: () => {
         setVisualOpacity(1)
-        if (unlockedRef.current) restoreAudio(p)
+        forceFullVolume(p)
       },
     })
+
+    // Red de seguridad: a los 2.5s volumen al máximo sí o sí
+    window.setTimeout(() => {
+      if (playerRef.current && unlockedRef.current) {
+        forceFullVolume(playerRef.current)
+        setVisualOpacity(1)
+      }
+    }, 2500)
   }
 
   function doLoadVideo(id: string) {
@@ -340,13 +377,22 @@ export default function YouTubePlayer({
     finishedRef.current = false
     awaitFadeInRef.current = true
     try {
-      // iOS: no stopVideo; loadVideoById mantiene el iframe/sesión
+      // iOS: no bajar volumen a 0 (setVolume no se recupera bien)
+      // Desktop: solo bajar si vamos a hacer fade-in de volumen
       if (!unlockedRef.current) {
         p.mute()
-      } else if (volumeWorksRef.current) {
-        p.setVolume(0)
+      } else {
+        p.unMute()
+        if (!ios.current && volumeWorksRef.current) {
+          p.setVolume(0)
+        } else {
+          try {
+            p.setVolume(100)
+          } catch {
+            /* ignore */
+          }
+        }
       }
-      // En iOS sin volume API: el negro visual ya cubre el corte de audio
       p.loadVideoById({ videoId: id, startSeconds: 0 })
       loadedRef.current = id
       window.setTimeout(() => {
@@ -355,13 +401,26 @@ export default function YouTubePlayer({
         } catch {
           setNeedsGesture(true)
           awaitFadeInRef.current = false
+          forceFullVolume(p)
         }
       }, ios.current ? 120 : 60)
+
+      // Si PLAYING no dispara fade-in, igual recuperar audio
+      window.setTimeout(() => {
+        if (!playerRef.current) return
+        if (awaitFadeInRef.current) {
+          awaitFadeInRef.current = false
+          startFadeIn()
+        } else if (unlockedRef.current) {
+          forceFullVolume(playerRef.current)
+        }
+      }, 3000)
     } catch (e) {
       awaitFadeInRef.current = false
       setStatus(e instanceof Error ? e.message : 'Error al cargar video')
       setNeedsGesture(true)
       setVisualOpacity(1)
+      forceFullVolume(p)
     }
   }
 
@@ -621,8 +680,9 @@ export default function YouTubePlayer({
               if (awaitFadeInRef.current) {
                 awaitFadeInRef.current = false
                 startFadeIn()
-              } else if (!fadingRef.current && unlockedRef.current) {
-                restoreAudio(event.target)
+              } else if (!fadingRef.current) {
+                // Cualquier play “normal”: volumen al máximo si ya hubo gesto
+                if (unlockedRef.current) forceFullVolume(event.target)
                 setVisualOpacity(1)
               }
             }
@@ -630,6 +690,8 @@ export default function YouTubePlayer({
               if (Date.now() < ignoreEndedUntil.current) return
               if (finishedRef.current) return
               finishedRef.current = true
+              // No dejar volumen en 0 para el siguiente tema
+              if (unlockedRef.current) forceFullVolume(event.target)
               onEndedRef.current()
             }
           },
@@ -718,8 +780,7 @@ export default function YouTubePlayer({
     try {
       // Gesto de usuario: desbloquea audio en iOS (obligatorio Safari)
       unlockedRef.current = true
-      p.unMute()
-      if (volumeWorksRef.current) p.setVolume(100)
+      forceFullVolume(p)
       const want = desiredRef.current
       if (want) {
         if (loadedRef.current !== want) {
@@ -727,10 +788,12 @@ export default function YouTubePlayer({
           doLoadVideo(want)
         } else {
           p.playVideo()
+          forceFullVolume(p)
           setVisualOpacity(1)
         }
       } else {
         p.playVideo()
+        forceFullVolume(p)
       }
       setNeedsGesture(false)
       setStatus(null)
