@@ -375,9 +375,7 @@ export default function YouTubePlayer({
       state = -1
     }
 
-    const isLive =
-      state === YT_PLAYING || state === YT_BUFFERING || state === 3
-    // BUFFERING = 3 in YT API
+    // PLAYING=1, BUFFERING=3
     const isPlayingNow = state === YT_PLAYING || state === 3
 
     if (isPlayingNow && loadedRef.current && unlockedRef.current) {
