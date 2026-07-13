@@ -84,7 +84,8 @@ export default function PlayerPage() {
   /** Tras cancel remoto: no rellenar con autoplay hasta que haya un pedido real */
   const suppressAutoplayRef = useRef(false)
   const flagsRef = useRef<RuntimeFlags>({
-    autoplayEnabled: false,
+    // TV jukebox: autoplay catálogo ON por defecto
+    autoplayEnabled: true,
     votingEnabled: true,
     skipThresholdPercent: 80,
     minVotesToSkip: 2,
@@ -107,7 +108,12 @@ export default function PlayerPage() {
     try {
       const res = await fetch('/api/config', { cache: 'no-store' })
       const data = await res.json()
-      const on = Boolean(data.autoplayMusic?.enabled)
+      // Si la config no trae el flag, default ON (jukebox TV)
+      const on =
+        data.autoplayMusic?.enabled === undefined ||
+        data.autoplayMusic?.enabled === null
+          ? true
+          : Boolean(data.autoplayMusic.enabled)
       flagsRef.current = {
         autoplayEnabled: on,
         votingEnabled: Boolean(data.voting?.enabled),
@@ -117,7 +123,10 @@ export default function PlayerPage() {
       setAutoplayOn(on)
       return on
     } catch {
-      return flagsRef.current.autoplayEnabled
+      // Red falló: mantener autoplay ON en TV
+      flagsRef.current.autoplayEnabled = true
+      setAutoplayOn(true)
+      return true
     }
   }, [])
 
@@ -126,8 +135,9 @@ export default function PlayerPage() {
       if (advancingRef.current) return
 
       const promote = opts?.promote !== false
-      const autoplayEnabled =
-        flagsRef.current.autoplayEnabled && !suppressAutoplayRef.current
+      // TV jukebox: siempre rellenar catálogo si la cola está vacía
+      // (salvo suppress tras cancel remoto sin pedidos)
+      const autoplayEnabled = !suppressAutoplayRef.current
       const localCurrent = playingItemRef.current
 
       if (promote) {
@@ -260,14 +270,14 @@ export default function PlayerPage() {
           excludeIdsRef.current.add(current.id)
         }
 
-        // Fin natural / votos: sí puede usar autoplay
+        // Fin natural / votos: siempre autoplay de la siguiente (catálogo si hace falta)
         suppressAutoplayRef.current = false
         const result = await advanceQueue(venueId, current.id, {
           excludeIds: rlsLocalRef.current
             ? excludeIdsRef.current
             : new Set(),
           status: asSkip ? 'skipped' : 'played',
-          autoplayEnabled: flagsRef.current.autoplayEnabled,
+          autoplayEnabled: true,
         })
 
         if (result.excludeIds && rlsLocalRef.current) {
@@ -285,9 +295,7 @@ export default function PlayerPage() {
         setPlayerNote(
           result.playing
             ? null
-            : flagsRef.current.autoplayEnabled
-              ? 'Cola vacía — buscando en catálogo…'
-              : 'Cola vacía — esperando pedidos'
+            : 'Cola vacía — autoplay buscando en catálogo…'
         )
       } finally {
         advancingRef.current = false

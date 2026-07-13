@@ -79,7 +79,7 @@ export const defaultJukeboxConfig: RuntimeJukeboxConfig = {
     closeTime: '02:00',
   },
   autoplayMusic: {
-    enabled: false,
+    enabled: true,
   },
   voting: {
     enabled: true,

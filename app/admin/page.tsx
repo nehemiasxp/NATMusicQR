@@ -59,7 +59,7 @@ const emptyConfig: RuntimeJukeboxConfig = {
     openTime: '18:00',
     closeTime: '02:00',
   },
-  autoplayMusic: { enabled: false },
+  autoplayMusic: { enabled: true },
   voting: {
     enabled: true,
     skipThresholdPercent: 80,
@@ -429,7 +429,7 @@ export default function AdminPage() {
       ...config,
       access: { ...emptyConfig.access, ...config.access },
       autoplayMusic: {
-        enabled: config.autoplayMusic?.enabled ?? false,
+        enabled: config.autoplayMusic?.enabled ?? true,
       },
       voting: {
         ...emptyConfig.voting,
