@@ -4,8 +4,8 @@
  * También se exportan versiones de UI (join/player).
  */
 
-export const JOIN_UI_VERSION = '2.6.0'
-export const PLAYER_UI_VERSION = '2.6.0'
+export const JOIN_UI_VERSION = '2.6.1'
+export const PLAYER_UI_VERSION = '2.6.1'
 
 /** Id de build (cambia en cada deploy de Vercel) */
 export function getBuildId(): string {

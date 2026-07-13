@@ -3,11 +3,13 @@
 /**
  * YouTube TV player — playlist + fade VISUAL (DJ).
  *
- * Audio (iOS + desktop):
- * - Nunca dejamos volumen en 0 con setVolume (causa “sin audio”).
- * - loadVideoById a menudo re-mutea: en cada PLAYING forzamos unMute + vol 100
- *   si ya hubo gesto de usuario.
- * - Fade solo visual (opacidad). En iOS setVolume no es fiable.
+ * Audio (Chrome + iOS + desktop):
+ * - Chrome PERMITE autoplay muteado: el video “reproduce” sin sonido.
+ *   Si ocultamos el CTA al recibir PLAYING, el audio NUNCA se desbloquea.
+ * - unlockedRef solo se pone true con gesto de usuario (click).
+ * - ensureLoud (unMute + setVolume(100)) solo corre tras ese gesto.
+ * - loadVideoById a menudo re-mutea: re-aplicamos en cada PLAYING + watchdog.
+ * - Fade solo visual (opacidad). Nunca setVolume(0).
  *
  * https://developers.google.com/youtube/iframe_api_reference
  */
@@ -67,6 +69,7 @@ const IOS_FADE_OUT_MS = 1600
 const IOS_FADE_IN_MS = 1400
 const BLACK_HOLD_MS = 180
 const DEFAULT_VOTE_FADE_MS = 4000
+const UNLOCK_SESSION_KEY = 'natmusicqr-yt-audio-unlocked'
 
 let apiPromise: Promise<void> | null = null
 
@@ -78,6 +81,22 @@ function isIOSDevice(): boolean {
     return true
   }
   return false
+}
+
+function readSessionUnlocked(): boolean {
+  try {
+    return sessionStorage.getItem(UNLOCK_SESSION_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function writeSessionUnlocked() {
+  try {
+    sessionStorage.setItem(UNLOCK_SESSION_KEY, '1')
+  } catch {
+    /* private mode / blocked */
+  }
 }
 
 function ensureYouTubeApi(): Promise<void> {
@@ -135,6 +154,14 @@ function easeOutCubic(t: number) {
   return 1 - Math.pow(1 - t, 3)
 }
 
+function safeIsMuted(p: YTPlayer): boolean {
+  try {
+    return Boolean(p.isMuted())
+  } catch {
+    return true
+  }
+}
+
 export default function YouTubePlayer({
   videoId,
   title,
@@ -150,7 +177,7 @@ export default function YouTubePlayer({
   const hostRef = useRef<HTMLDivElement | null>(null)
   const playerRef = useRef<YTPlayer | null>(null)
   const readyRef = useRef(false)
-  /** true tras gesto de usuario (toque) — permite audio con sonido */
+  /** true tras gesto de usuario — Chrome exige gesto para audio con sonido */
   const unlockedRef = useRef(false)
   const desiredRef = useRef<string | null>(null)
   const loadedRef = useRef<string | null>(null)
@@ -173,7 +200,7 @@ export default function YouTubePlayer({
   onFadeCompleteRef.current = onFadeComplete
   onErrorRef.current = onError
 
-  const [needsGesture, setNeedsGesture] = useState(false)
+  const [needsGesture, setNeedsGesture] = useState(true)
   const [fading, setFading] = useState(false)
   const [fadeLabel, setFadeLabel] = useState('Mezclando…')
   const [fadeProgress, setFadeProgress] = useState(0)
@@ -181,12 +208,18 @@ export default function YouTubePlayer({
   const [status, setStatus] = useState<string | null>(null)
   const [visualOpacity, setVisualOpacity] = useState(1)
   const [iosMode, setIosMode] = useState(false)
+  const [mutedPlaying, setMutedPlaying] = useState(false)
 
   desiredRef.current = videoId?.trim() || null
 
   useEffect(() => {
     ios.current = isIOSDevice()
     setIosMode(ios.current)
+    // Misma pestaña: si ya desbloqueó audio, reutilizar (Chrome MEI / reload suave)
+    if (readSessionUnlocked()) {
+      unlockedRef.current = true
+      setNeedsGesture(false)
+    }
   }, [])
 
   function getFadeOutDuration() {
@@ -206,21 +239,53 @@ export default function YouTubePlayer({
   }
 
   /**
-   * Audio a tope. Crítico: loadVideoById re-mutea a menudo.
+   * Audio a tope. Solo tras gesto (unlockedRef).
    * NO usamos setVolume(0) en ninguna transición.
    */
   function ensureLoud(p: YTPlayer | null | undefined) {
-    if (!p) return
-    if (!unlockedRef.current) return
+    if (!p) return false
+    if (!unlockedRef.current) return false
     try {
       p.unMute()
       p.setVolume(100)
+      const stillMuted = safeIsMuted(p)
+      if (stillMuted) {
+        // Segundo intento (a veces Chrome aplica unMute un tick después)
+        p.unMute()
+        p.setVolume(100)
+      }
+      const ok = !safeIsMuted(p)
+      setMutedPlaying(!ok)
+      return ok
     } catch {
       try {
         p.unMute()
       } catch {
         /* ignore */
       }
+      return false
+    }
+  }
+
+  /**
+   * Si el video suena muteado y aún no hay gesto → CTA visible.
+   * Si ya hay gesto → forzar unMute.
+   * NUNCA ocultar el CTA solo porque llegó PLAYING (Chrome autoplay muteado).
+   */
+  function syncAudioUi(p: YTPlayer) {
+    if (!unlockedRef.current) {
+      setNeedsGesture(true)
+      setMutedPlaying(true)
+      return
+    }
+    const ok = ensureLoud(p)
+    if (ok) {
+      setNeedsGesture(false)
+      setMutedPlaying(false)
+    } else {
+      // Gesto previo pero YouTube re-muteó o bloqueó
+      setNeedsGesture(true)
+      setMutedPlaying(true)
     }
   }
 
@@ -285,7 +350,6 @@ export default function YouTubePlayer({
       },
     })
 
-    // Seguridad audio
     window.setTimeout(() => ensureLoud(playerRef.current), 400)
     window.setTimeout(() => ensureLoud(playerRef.current), 1200)
     window.setTimeout(() => {
@@ -302,11 +366,10 @@ export default function YouTubePlayer({
     awaitFadeInRef.current = true
     lastLegalTimeRef.current = 0
     try {
-      // Solo mute si AÚN no hubo gesto (autoplay policy)
       if (!unlockedRef.current) {
+        // Autoplay policy: mute hasta gesto
         p.mute()
       } else {
-        // Ya desbloqueado: audio listo ANTES y DESPUÉS del load
         ensureLoud(p)
       }
 
@@ -416,13 +479,12 @@ export default function YouTubePlayer({
 
     if (isPlayingNow && loadedRef.current) {
       pendingIdRef.current = id
-      // Solo fade VISUAL — el audio sigue hasta el load (corte breve bajo negro)
       runVisualFade({
         fromOp: 1,
         toOp: 0.04,
         ms: getFadeOutDuration(),
         ease: easeInCubic,
-        label: ios.current ? 'Mezclando…' : 'Mezclando…',
+        label: 'Mezclando…',
         onDone: () => {
           const target = pendingIdRef.current || id
           pendingIdRef.current = null
@@ -498,6 +560,9 @@ export default function YouTubePlayer({
       wrap.appendChild(host)
       hostRef.current = host
 
+      // Si ya hubo gesto en esta pestaña, arrancar con sonido (Chrome MEI / reload)
+      const startMuted = !unlockedRef.current
+
       playerRef.current = new window.YT.Player(host, {
         width: '100%',
         height: '100%',
@@ -509,8 +574,7 @@ export default function YouTubePlayer({
           rel: 0,
           modestbranding: 1,
           playsinline: 1,
-          // mute inicial SOLO para pasar autoplay; tras gesto → unMute siempre
-          mute: 1,
+          mute: startMuted ? 1 : 0,
           fs: 0,
           iv_load_policy: 3,
           cc_load_policy: 0,
@@ -525,9 +589,16 @@ export default function YouTubePlayer({
             loadedRef.current = firstId
             lastLegalTimeRef.current = 0
             try {
-              // Primer arranque: mute por política; volumen API a 100 por si desmutea
-              event.target.mute()
-              event.target.setVolume(100)
+              if (unlockedRef.current) {
+                event.target.unMute()
+                event.target.setVolume(100)
+              } else {
+                // Primer arranque: mute por política de autoplay
+                event.target.mute()
+                event.target.setVolume(100)
+                setNeedsGesture(true)
+                setMutedPlaying(true)
+              }
             } catch {
               /* ignore */
             }
@@ -542,16 +613,25 @@ export default function YouTubePlayer({
               } catch {
                 setNeedsGesture(true)
               }
+              // Si no llega a PLAYING (bloqueo total), pedir gesto
               window.setTimeout(() => {
                 try {
                   const st = event.target.getPlayerState()
                   if (st === -1 || st === YT_PAUSED || st === YT_CUED) {
                     setNeedsGesture(true)
                   }
+                  // Si está playing pero muteado → también pedir gesto
+                  if (
+                    (st === YT_PLAYING || st === 3) &&
+                    !unlockedRef.current
+                  ) {
+                    setNeedsGesture(true)
+                    setMutedPlaying(true)
+                  }
                 } catch {
                   setNeedsGesture(true)
                 }
-              }, ios.current ? 2800 : 2200)
+              }, ios.current ? 2800 : 1800)
             } else {
               setIdle(true)
               try {
@@ -563,14 +643,13 @@ export default function YouTubePlayer({
           },
           onStateChange: (event: { data: number; target: YTPlayer }) => {
             if (event.data === YT_PLAYING) {
-              setNeedsGesture(false)
               setIdle(false)
               setStatus(null)
               const vid = readId(event.target)
               if (vid) loadedRef.current = vid
 
-              // SIEMPRE re-aplicar audio si ya hubo gesto (loadVideoById re-mutea)
-              ensureLoud(event.target)
+              // CLAVE Chrome: PLAYING muteado ≠ audio OK
+              syncAudioUi(event.target)
 
               if (awaitFadeInRef.current) {
                 awaitFadeInRef.current = false
@@ -623,6 +702,7 @@ export default function YouTubePlayer({
           },
           onAutoplayBlocked: () => {
             setNeedsGesture(true)
+            setMutedPlaying(true)
           },
         },
       })
@@ -662,29 +742,50 @@ export default function YouTubePlayer({
     }
   }, [])
 
-  // Watchdog: cada 2s, si estamos unlocked y playing → unMute + vol 100
+  // Watchdog: si unlocked y playing → unMute + vol 100; si muteado → reabrir CTA
   useEffect(() => {
     if (audioWatchdog.current != null) {
       window.clearInterval(audioWatchdog.current)
     }
     audioWatchdog.current = window.setInterval(() => {
       const p = playerRef.current
-      if (!p || !readyRef.current || !unlockedRef.current) return
+      if (!p || !readyRef.current) return
       if (fadingRef.current) return
       try {
         const st = p.getPlayerState()
-        if (st === YT_PLAYING || st === 3) {
-          if (p.isMuted()) p.unMute()
+        if (st !== YT_PLAYING && st !== 3) return
+
+        if (!unlockedRef.current) {
+          // Video visible/play muteado en Chrome → mantener CTA
+          if (safeIsMuted(p)) {
+            setNeedsGesture(true)
+            setMutedPlaying(true)
+          }
+          return
+        }
+
+        if (safeIsMuted(p)) {
+          p.unMute()
+          p.setVolume(100)
+          if (safeIsMuted(p)) {
+            setNeedsGesture(true)
+            setMutedPlaying(true)
+          } else {
+            setMutedPlaying(false)
+            setNeedsGesture(false)
+          }
+        } else {
           try {
-            if (p.getVolume() < 80) p.setVolume(100)
+            if (p.getVolume() < 100) p.setVolume(100)
           } catch {
             p.setVolume(100)
           }
+          setMutedPlaying(false)
         }
       } catch {
         /* ignore */
       }
-    }, 2000)
+    }, 1500)
     return () => {
       if (audioWatchdog.current != null) {
         window.clearInterval(audioWatchdog.current)
@@ -756,12 +857,29 @@ export default function YouTubePlayer({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [fadeOutKey, fadeOutMs])
 
+  /**
+   * Debe correr en el mismo call stack del click del usuario.
+   * Chrome solo desbloquea audio con unMute() dentro de un gesto.
+   */
   function handleUnlock() {
     const p = playerRef.current
-    if (!p) return
+    if (!p) {
+      setStatus('Player aún no listo. Espera un segundo y vuelve a clic.')
+      setNeedsGesture(true)
+      return
+    }
     try {
       unlockedRef.current = true
-      ensureLoud(p)
+      writeSessionUnlocked()
+
+      // Orden crítico en el gesto: unMute → volume → play
+      try {
+        p.unMute()
+        p.setVolume(100)
+      } catch {
+        /* ignore */
+      }
+
       const want = desiredRef.current
       if (want) {
         if (loadedRef.current !== want) {
@@ -776,14 +894,39 @@ export default function YouTubePlayer({
         p.playVideo()
         ensureLoud(p)
       }
-      // Refuerzo tras el gesto (iOS a veces tarda un frame)
-      window.setTimeout(() => ensureLoud(playerRef.current), 100)
-      window.setTimeout(() => ensureLoud(playerRef.current), 500)
-      window.setTimeout(() => ensureLoud(playerRef.current), 1500)
-      setNeedsGesture(false)
-      setStatus(null)
+
+      // Refuerzos (loadVideoById / iOS re-mutean con delay)
+      window.setTimeout(() => ensureLoud(playerRef.current), 50)
+      window.setTimeout(() => ensureLoud(playerRef.current), 200)
+      window.setTimeout(() => ensureLoud(playerRef.current), 600)
+      window.setTimeout(() => {
+        const cur = playerRef.current
+        if (!cur) return
+        const ok = ensureLoud(cur)
+        if (ok) {
+          setNeedsGesture(false)
+          setMutedPlaying(false)
+          setStatus(null)
+        } else {
+          // Falló unMute (raro en Chrome si hay gesto real)
+          setNeedsGesture(true)
+          setMutedPlaying(true)
+          setStatus(
+            'Chrome sigue muteado. Haz clic de nuevo en “Activar sonido”.'
+          )
+        }
+      }, 900)
+
+      // Optimista: ocultar CTA si unMute respondió al instante
+      if (!safeIsMuted(p)) {
+        setNeedsGesture(false)
+        setMutedPlaying(false)
+        setStatus(null)
+      }
     } catch {
-      setStatus('No se pudo iniciar. Vuelve a tocar la pantalla.')
+      unlockedRef.current = false
+      setNeedsGesture(true)
+      setStatus('No se pudo iniciar el audio. Vuelve a hacer clic.')
     }
   }
 
@@ -800,7 +943,8 @@ export default function YouTubePlayer({
         }}
       />
 
-      {!needsGesture && (
+      {/* Bloqueo de clics al iframe SOLO si ya hay audio desbloqueado */}
+      {!needsGesture && !mutedPlaying && (
         <div
           className="absolute inset-0 z-[8] cursor-default"
           aria-hidden
@@ -844,16 +988,42 @@ export default function YouTubePlayer({
         </div>
       )}
 
+      {/*
+        Chrome: autoplay muteado deja el video en PLAYING sin audio.
+        Este CTA debe permanecer hasta unMute real por gesto.
+      */}
       {needsGesture && !fading && (
         <button
           type="button"
+          onPointerDown={(e) => {
+            // Chrome desbloquea audio en el gesto de pointerdown (antes que click)
+            if (e.button !== 0) return
+            handleUnlock()
+          }}
           onClick={handleUnlock}
-          className="absolute inset-0 z-20 flex items-center justify-center bg-black/75 text-white"
+          className="absolute inset-0 z-20 flex items-center justify-center bg-black/80 text-white"
         >
-          <span className="rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold shadow-lg hover:bg-emerald-500 active:scale-[0.98]">
-            ▶ Toca para activar sonido
-            {iosMode ? ' (iPhone / iPad)' : ''}
+          <span className="flex flex-col items-center gap-3 px-6 text-center">
+            <span className="rounded-full bg-emerald-600 px-8 py-4 text-lg font-semibold shadow-lg hover:bg-emerald-500 active:scale-[0.98]">
+              ▶ Activar sonido al 100%
+              {iosMode ? ' (iPhone / iPad)' : ' (Chrome)'}
+            </span>
+            <span className="max-w-sm text-sm text-zinc-300">
+              El video puede verse sin audio. Chrome exige un clic para
+              desmutear el iframe de YouTube.
+            </span>
           </span>
+        </button>
+      )}
+
+      {/* Chip si se re-mutea a mitad de sesión */}
+      {!needsGesture && mutedPlaying && !fading && (
+        <button
+          type="button"
+          onClick={handleUnlock}
+          className="absolute bottom-4 left-1/2 z-20 -translate-x-1/2 rounded-full bg-amber-500 px-5 py-2 text-sm font-semibold text-black shadow-lg hover:bg-amber-400"
+        >
+          🔇 Sin audio — clic para activar
         </button>
       )}
     </div>
