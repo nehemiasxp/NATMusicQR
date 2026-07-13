@@ -1,21 +1,15 @@
 'use client'
 
 /**
- * YouTube TV player — enfoque SIMPLE y fiable (v2.7).
+ * YouTube TV player v2.7.1
  *
- * Problema: el player “inteligente” (DOM host, overlays, anti-seek, unlock
- * gates) dejó de reproducir y el botón no arrancaba.
- *
- * Solución distinta:
- * 1) iframe manual con allow="autoplay; encrypted-media; …" (Chrome lo exige)
- * 2) YT.Player enganchado a ese iframe
- * 3) Por canción: se recrea el iframe (como el deploy original que sí andaba)
- * 4) Botón play: en el gesto del usuario recarga el embed con mute=0
- *    (Chrome permite sonido si play nace del click)
- * 5) Controles nativos de YouTube visibles como red de seguridad
+ * - Autoplay: primera canción mute→play→unMute; siguientes con loadVideoById
+ *   (sin botón, sin recrear iframe).
+ * - Voto negativo: fade de VOLUMEN real 100→0 + opacidad, luego avanza cola.
+ * - Siguiente canción autoplay a volumen 100 otra vez.
+ * - Botón ▶ solo si el navegador bloquea el arranque (fallback).
  *
  * https://developers.google.com/youtube/iframe_api_reference
- * https://developer.chrome.com/blog/autoplay
  */
 
 import Script from 'next/script'
@@ -48,6 +42,7 @@ type YTPlayer = {
   getVolume: () => number
   isMuted: () => boolean
   getIframe?: () => HTMLIFrameElement
+  getVideoData?: () => { video_id?: string }
 }
 
 type Props = {
@@ -64,10 +59,10 @@ type Props = {
 
 const YT_ENDED = 0
 const YT_PLAYING = 1
-const YT_PAUSED = 2
-const YT_CUED = 5
+const YT_BUFFERING = 3
 
-const DEFAULT_VOTE_FADE_MS = 4000
+const DEFAULT_VOTE_FADE_MS = 4200
+const SESSION_KEY = 'natmusicqr-yt-audio-ok'
 
 function buildEmbedSrc(
   videoId: string,
@@ -80,11 +75,11 @@ function buildEmbedSrc(
     autoplay: opts.autoplay ? '1' : '0',
     mute: opts.mute ? '1' : '0',
     playsinline: '1',
-    // Controles ON: si la API falla, el usuario aún puede pulsar ▶ de YouTube
-    controls: '1',
+    controls: '0',
+    disablekb: '1',
     rel: '0',
     modestbranding: '1',
-    fs: '1',
+    fs: '0',
     iv_load_policy: '3',
     cc_load_policy: '0',
   })
@@ -128,6 +123,26 @@ function loadYouTubeApi(): Promise<void> {
   })
 }
 
+function sessionAudioOk(): boolean {
+  try {
+    return sessionStorage.getItem(SESSION_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+function markSessionAudioOk() {
+  try {
+    sessionStorage.setItem(SESSION_KEY, '1')
+  } catch {
+    /* ignore */
+  }
+}
+
+function easeInCubic(t: number) {
+  return t * t * t
+}
+
 export default function YouTubePlayer({
   videoId,
   title,
@@ -140,14 +155,17 @@ export default function YouTubePlayer({
   const reactId = useId().replace(/:/g, '')
   const mountRef = useRef<HTMLDivElement | null>(null)
   const playerRef = useRef<YTPlayer | null>(null)
-  const iframeRef = useRef<HTMLIFrameElement | null>(null)
+  const readyRef = useRef(false)
   const activeIdRef = useRef<string | null>(null)
-  /** Generación: evita que un mount async viejo pise al nuevo */
   const genRef = useRef(0)
   const finishedRef = useRef(false)
+  const fadingRef = useRef(false)
   const lastFadeKey = useRef<string | number | null>(null)
   const kickTimer = useRef<number | null>(null)
-  const fadeTimer = useRef<number | null>(null)
+  const fadeRaf = useRef<number | null>(null)
+  const ignoreEndedUntil = useRef(0)
+  /** Tras primer play con audio, las siguientes van en autoplay sin botón */
+  const audioUnlockedRef = useRef(false)
 
   const onEndedRef = useRef(onEnded)
   const onFadeCompleteRef = useRef(onFadeComplete)
@@ -159,7 +177,13 @@ export default function YouTubePlayer({
   const [needsPlay, setNeedsPlay] = useState(false)
   const [status, setStatus] = useState<string | null>(null)
   const [opacity, setOpacity] = useState(1)
+  const [fading, setFading] = useState(false)
+  const [fadeProgress, setFadeProgress] = useState(0)
   const [apiReady, setApiReady] = useState(false)
+
+  useEffect(() => {
+    if (sessionAudioOk()) audioUnlockedRef.current = true
+  }, [])
 
   function clearKick() {
     if (kickTimer.current != null) {
@@ -168,8 +192,18 @@ export default function YouTubePlayer({
     }
   }
 
+  function cancelFade() {
+    if (fadeRaf.current != null) {
+      cancelAnimationFrame(fadeRaf.current)
+      fadeRaf.current = null
+    }
+  }
+
   function destroyPlayer() {
     clearKick()
+    cancelFade()
+    fadingRef.current = false
+    readyRef.current = false
     if (playerRef.current) {
       try {
         playerRef.current.destroy()
@@ -178,7 +212,6 @@ export default function YouTubePlayer({
       }
       playerRef.current = null
     }
-    iframeRef.current = null
     if (mountRef.current) {
       mountRef.current.innerHTML = ''
     }
@@ -186,24 +219,29 @@ export default function YouTubePlayer({
 
   function scheduleKick(target: YTPlayer) {
     clearKick()
+    // Si ya hubo audio en la sesión, no molestar con botón salvo fallo real
+    const delay = audioUnlockedRef.current ? 4000 : 2500
     kickTimer.current = window.setTimeout(() => {
+      if (fadingRef.current) return
       try {
         const st = target.getPlayerState()
-        // No está reproduciendo → mostrar botón grande
-        if (st !== YT_PLAYING && st !== 3) {
+        if (st !== YT_PLAYING && st !== YT_BUFFERING) {
           setNeedsPlay(true)
         }
       } catch {
-        setNeedsPlay(true)
+        if (!audioUnlockedRef.current) setNeedsPlay(true)
       }
-    }, 2200)
+    }, delay)
   }
 
+  /** Volumen al 100% + unMute (autoplay con sonido cuando Chrome lo permite) */
   function forceLoud(p: YTPlayer | null | undefined) {
-    if (!p) return
+    if (!p || fadingRef.current) return
     try {
       p.unMute()
       p.setVolume(100)
+      audioUnlockedRef.current = true
+      markSessionAudioOk()
     } catch {
       try {
         p.unMute()
@@ -213,10 +251,113 @@ export default function YouTubePlayer({
     }
   }
 
+  function safeSetVolume(p: YTPlayer, vol: number) {
+    const v = Math.max(0, Math.min(100, Math.round(vol)))
+    try {
+      p.setVolume(v)
+    } catch {
+      /* ignore */
+    }
+  }
+
   /**
-   * Monta un iframe NUEVO + YT.Player.
-   * muteStart=true → autoplay seguro; muteStart=false → con sonido (gesto usuario).
+   * Fade de volumen real al votar negativo (como v2.1.4).
+   * Baja 100→0 con ease-in, oscurece imagen, pausa y avanza cola.
    */
+  function startVolumeFadeOut(durationMs: number) {
+    const player = playerRef.current
+    if (!player || fadingRef.current || finishedRef.current) return
+
+    fadingRef.current = true
+    setFading(true)
+    setFadeProgress(0)
+    setNeedsPlay(false)
+    cancelFade()
+
+    let startVol = 100
+    try {
+      player.unMute()
+      player.playVideo()
+      const g = player.getVolume()
+      if (typeof g === 'number' && !Number.isNaN(g) && g > 0) startVol = g
+      player.setVolume(startVol)
+    } catch {
+      startVol = 100
+    }
+
+    const ms = Math.max(1200, durationMs)
+    const t0 = performance.now()
+
+    const tick = (now: number) => {
+      const raw = Math.min(1, (now - t0) / ms)
+      const eased = easeInCubic(raw)
+      const vol = startVol * (1 - eased)
+      safeSetVolume(player, vol)
+      setOpacity(1 - eased * 0.92)
+      setFadeProgress(Math.round(raw * 100))
+
+      if (raw < 1) {
+        fadeRaf.current = requestAnimationFrame(tick)
+        return
+      }
+
+      // Silencio y corte limpio
+      safeSetVolume(player, 0)
+      try {
+        player.mute()
+        player.pauseVideo()
+      } catch {
+        /* ignore */
+      }
+
+      fadingRef.current = false
+      setFading(false)
+      setFadeProgress(100)
+      finishedRef.current = true
+      ;(onFadeCompleteRef.current ?? onEndedRef.current)()
+    }
+
+    fadeRaf.current = requestAnimationFrame(tick)
+  }
+
+  /** Carga siguiente tema en el MISMO iframe (autoplay continuo) */
+  function loadNextTrack(id: string) {
+    const p = playerRef.current
+    if (!p || !readyRef.current) return false
+
+    finishedRef.current = false
+    fadingRef.current = false
+    cancelFade()
+    setFading(false)
+    setFadeProgress(0)
+    setOpacity(1)
+    setStatus(null)
+    setNeedsPlay(false)
+    activeIdRef.current = id
+    ignoreEndedUntil.current = Date.now() + 2500
+
+    try {
+      // Subir volumen ANTES del load (por si el fade lo dejó en 0)
+      p.unMute()
+      p.setVolume(100)
+      p.loadVideoById({ videoId: id, startSeconds: 0 })
+      window.setTimeout(() => {
+        try {
+          p.playVideo()
+          forceLoud(p)
+        } catch {
+          setNeedsPlay(true)
+        }
+      }, 100)
+      window.setTimeout(() => forceLoud(playerRef.current), 400)
+      window.setTimeout(() => forceLoud(playerRef.current), 1200)
+      scheduleKick(p)
+      return true
+    } catch {
+      return false
+    }
+  }
+
   async function mountEmbed(
     id: string,
     opts: { muteStart: boolean; fromUserGesture: boolean }
@@ -227,25 +368,33 @@ export default function YouTubePlayer({
     const gen = ++genRef.current
     setStatus(null)
     finishedRef.current = false
+    fadingRef.current = false
+    cancelFade()
+    setFading(false)
+    setOpacity(1)
     activeIdRef.current = id
+    readyRef.current = false
 
     destroyPlayer()
 
     await loadYouTubeApi()
-    if (gen !== genRef.current) return // obsoleto
+    if (gen !== genRef.current) return
     if (!window.YT?.Player) {
-      setStatus('No se pudo cargar la API de YouTube. Revisa red / bloqueadores.')
+      setStatus('No se pudo cargar YouTube. Revisa la red o bloqueadores.')
       setNeedsPlay(true)
       return
     }
     if (activeIdRef.current !== id || gen !== genRef.current) return
+
+    // Si ya hubo audio en la sesión, intentar autoplay con sonido
+    const startMuted =
+      opts.fromUserGesture ? false : opts.muteStart && !audioUnlockedRef.current
 
     const iframe = document.createElement('iframe')
     iframe.id = `yt-iframe-${reactId}-${gen}`
     iframe.width = '100%'
     iframe.height = '100%'
     iframe.title = title || 'YouTube'
-    // Chrome: sin allow=autoplay el playVideo() del API falla
     iframe.allow =
       'accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share'
     iframe.setAttribute('allowfullscreen', 'true')
@@ -256,14 +405,13 @@ export default function YouTubePlayer({
     iframe.style.height = '100%'
     iframe.style.position = 'absolute'
     iframe.style.inset = '0'
-    iframe.style.pointerEvents = 'auto'
+    iframe.style.pointerEvents = 'none'
     iframe.src = buildEmbedSrc(id, {
       autoplay: true,
-      mute: opts.muteStart,
+      mute: startMuted,
     })
 
     mount.appendChild(iframe)
-    iframeRef.current = iframe
 
     try {
       const player = new window.YT.Player(iframe, {
@@ -271,18 +419,17 @@ export default function YouTubePlayer({
           onReady: (event: { target: YTPlayer }) => {
             if (gen !== genRef.current) return
             playerRef.current = event.target
+            readyRef.current = true
             try {
               event.target.setVolume(100)
-              if (opts.muteStart && !opts.fromUserGesture) {
+              if (startMuted) {
                 event.target.mute()
               } else {
                 event.target.unMute()
                 event.target.setVolume(100)
               }
               event.target.playVideo()
-              if (!opts.muteStart || opts.fromUserGesture) {
-                forceLoud(event.target)
-              }
+              if (!startMuted) forceLoud(event.target)
             } catch {
               setNeedsPlay(true)
             }
@@ -290,19 +437,29 @@ export default function YouTubePlayer({
           },
           onStateChange: (event: { data: number; target: YTPlayer }) => {
             if (gen !== genRef.current) return
+
             if (event.data === YT_PLAYING) {
+              if (fadingRef.current) return
               setNeedsPlay(false)
               setStatus(null)
               clearKick()
+              setOpacity(1)
+              // Autoplay con sonido: unMute al reproducir
               forceLoud(event.target)
               window.setTimeout(() => {
-                if (gen === genRef.current) forceLoud(event.target)
-              }, 300)
+                if (gen === genRef.current && !fadingRef.current) {
+                  forceLoud(event.target)
+                }
+              }, 350)
               window.setTimeout(() => {
-                if (gen === genRef.current) forceLoud(event.target)
-              }, 1000)
+                if (gen === genRef.current && !fadingRef.current) {
+                  forceLoud(event.target)
+                }
+              }, 1100)
             }
-            if (event.data === YT_ENDED) {
+
+            if (event.data === YT_ENDED && !fadingRef.current) {
+              if (Date.now() < ignoreEndedUntil.current) return
               if (finishedRef.current) return
               finishedRef.current = true
               onEndedRef.current()
@@ -337,7 +494,7 @@ export default function YouTubePlayer({
     }
   }
 
-  // Montar / cambiar de canción
+  // Cambio de canción: reutilizar player (autoplay) o montar uno nuevo
   useEffect(() => {
     const id = videoId?.trim() || null
     if (!id) {
@@ -348,94 +505,105 @@ export default function YouTubePlayer({
       return
     }
 
-    // Nueva canción → iframe fresco (fiable)
-    setOpacity(1)
-    void mountEmbed(id, { muteStart: true, fromUserGesture: false })
+    // Mismo id → no tocar
+    if (id === activeIdRef.current && playerRef.current && readyRef.current) {
+      return
+    }
+
+    // Player listo → loadVideoById (autoplay de la siguiente, sin botón)
+    if (playerRef.current && readyRef.current && !fadingRef.current) {
+      const ok = loadNextTrack(id)
+      if (ok) return
+    }
+
+    // Primer boot o falló load → montar iframe
+    const muteStart = !audioUnlockedRef.current
+    void mountEmbed(id, { muteStart, fromUserGesture: false })
 
     return () => {
-      // Solo destruir al desmontar o al cambiar id (cleanup del effect)
       clearKick()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [videoId])
 
-  // Cleanup total al unmount
   useEffect(() => {
     return () => {
-      if (fadeTimer.current != null) window.clearTimeout(fadeTimer.current)
       destroyPlayer()
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // Fade visual por votos (sin tocar volumen a 0)
+  // Voto negativo / skip de sala → bajar volumen y terminar
   useEffect(() => {
     if (fadeOutKey == null || fadeOutKey === '') return
     if (lastFadeKey.current === fadeOutKey) return
     lastFadeKey.current = fadeOutKey
 
-    setOpacity(1)
-    const ms = Math.max(800, fadeOutMs)
-    const t0 = performance.now()
-    let raf = 0
-    const tick = (now: number) => {
-      const raw = Math.min(1, (now - t0) / ms)
-      setOpacity(1 - raw * 0.95)
-      if (raw < 1) {
-        raf = requestAnimationFrame(tick)
-        return
-      }
+    const t = window.setTimeout(() => {
+      startVolumeFadeOut(fadeOutMs)
+    }, 60)
+
+    return () => window.clearTimeout(t)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [fadeOutKey, fadeOutMs])
+
+  // Watchdog autoplay: si está playing y no en fade → volumen 100
+  useEffect(() => {
+    const t = window.setInterval(() => {
+      const p = playerRef.current
+      if (!p || !readyRef.current || fadingRef.current) return
       try {
-        playerRef.current?.pauseVideo()
+        const st = p.getPlayerState()
+        if (st === YT_PLAYING || st === YT_BUFFERING) {
+          forceLoud(p)
+        }
       } catch {
         /* ignore */
       }
-      finishedRef.current = true
-      ;(onFadeCompleteRef.current ?? onEndedRef.current)()
-    }
-    raf = requestAnimationFrame(tick)
-    fadeTimer.current = window.setTimeout(() => {
-      cancelAnimationFrame(raf)
-    }, ms + 500) as unknown as number
+    }, 2500)
+    return () => window.clearInterval(t)
+  }, [])
 
-    return () => {
-      cancelAnimationFrame(raf)
-      if (fadeTimer.current != null) {
-        window.clearTimeout(fadeTimer.current)
-        fadeTimer.current = null
-      }
-    }
-  }, [fadeOutKey, fadeOutMs])
-
-  /**
-   * Botón grande — corre DENTRO del gesto del usuario.
-   * Estrategia nuclear que sí funciona en Chrome:
-   * recrear el embed con mute=0 + autoplay=1 en el mismo click.
-   */
+  /** Fallback si el autoplay del browser falla */
   function handlePlayClick() {
     const id = (videoId?.trim() || activeIdRef.current || '').trim()
     if (!id) {
-      setStatus('No hay canción en cola para reproducir')
+      setStatus('No hay canción en cola')
       return
     }
 
     setNeedsPlay(false)
     setStatus(null)
     setOpacity(1)
+    finishedRef.current = false
+    fadingRef.current = false
+    audioUnlockedRef.current = true
+    markSessionAudioOk()
 
-    // 1) Intento rápido con player existente
     const p = playerRef.current
-    if (p) {
+    if (p && readyRef.current) {
       try {
         p.unMute()
         p.setVolume(100)
         p.playVideo()
+        forceLoud(p)
+        // Si en 1.5s no suena/play, recrear con mute=0
+        window.setTimeout(() => {
+          try {
+            const st = playerRef.current?.getPlayerState()
+            if (st !== YT_PLAYING && st !== YT_BUFFERING) {
+              void mountEmbed(id, { muteStart: false, fromUserGesture: true })
+            }
+          } catch {
+            void mountEmbed(id, { muteStart: false, fromUserGesture: true })
+          }
+        }, 1500)
+        return
       } catch {
-        /* recrearemos abajo */
+        /* fall through */
       }
     }
 
-    // 2) Nuclear: nuevo iframe con sonido (permiso del click actual)
     void mountEmbed(id, { muteStart: false, fromUserGesture: true })
   }
 
@@ -451,15 +619,23 @@ export default function YouTubePlayer({
         }}
       />
 
-      {/* Contenedor del iframe — pointer-events ON */}
       <div
         ref={mountRef}
         className="absolute inset-0 h-full w-full"
         style={{
           opacity,
-          transition: 'opacity 0.2s ease-out',
+          transition: fading ? 'none' : 'opacity 0.25s ease-out',
         }}
       />
+
+      {/* Capa para no interactuar con el iframe TV (salvo botón play) */}
+      {!needsPlay && (
+        <div
+          className="absolute inset-0 z-[8]"
+          aria-hidden
+          onContextMenu={(e) => e.preventDefault()}
+        />
+      )}
 
       {title ? (
         <span className="sr-only">Reproduciendo: {title}</span>
@@ -474,10 +650,26 @@ export default function YouTubePlayer({
       {!hasVideo && (
         <div className="pointer-events-none absolute inset-0 z-[5] flex flex-col items-center justify-center bg-black/80 p-6 text-center">
           <p className="text-xl text-zinc-400">Esperando canciones…</p>
+          <p className="mt-2 text-sm text-zinc-600">Autoplay al llegar el pedido</p>
         </div>
       )}
 
-      {hasVideo && needsPlay && (
+      {fading && (
+        <div className="pointer-events-none absolute inset-0 z-20 flex flex-col items-center justify-end bg-gradient-to-t from-black via-black/50 to-transparent pb-10">
+          <p className="text-sm font-medium tracking-wide text-zinc-100">
+            La sala pidió cambio…
+          </p>
+          <p className="mt-1 text-xs text-zinc-400">Bajando volumen</p>
+          <div className="mt-3 h-1 w-44 overflow-hidden rounded-full bg-zinc-800">
+            <div
+              className="h-full rounded-full bg-emerald-500"
+              style={{ width: `${fadeProgress}%` }}
+            />
+          </div>
+        </div>
+      )}
+
+      {hasVideo && needsPlay && !fading && (
         <button
           type="button"
           onClick={handlePlayClick}
@@ -485,10 +677,10 @@ export default function YouTubePlayer({
         >
           <span className="flex flex-col items-center gap-3 px-6 text-center">
             <span className="rounded-full bg-emerald-600 px-10 py-5 text-xl font-bold shadow-xl hover:bg-emerald-500 active:scale-[0.98]">
-              ▶ Reproducir
+              ▶ Iniciar autoplay
             </span>
             <span className="max-w-sm text-sm text-zinc-300">
-              Pulsa para iniciar el video con sonido
+              Solo la primera vez en esta pestaña
               {apiReady ? '' : ' · cargando YouTube…'}
             </span>
           </span>
