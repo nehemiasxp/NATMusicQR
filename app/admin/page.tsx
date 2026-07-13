@@ -8,7 +8,7 @@ const STORAGE_KEY = 'natmusicqr:admin-password'
 const DEVICE_KEY = 'natmusicqr:admin-device-id'
 
 /** Sube este número en cada release para verificar el deploy en Vercel */
-export const ADMIN_UI_VERSION = '2.4.0'
+export const ADMIN_UI_VERSION = '2.6.0'
 
 type AdminDeviceRow = {
   id: string
@@ -797,7 +797,7 @@ export default function AdminPage() {
               />
             </Field>
             {error && (
-              <p className="mt-3 text-sm text-red-400">{error}</p>
+              <p className="mt-3 text-sm text-emerald-400">{error}</p>
             )}
             <button
               type="submit"
@@ -831,22 +831,20 @@ export default function AdminPage() {
   ]
 
   return (
-    <div className="min-h-screen bg-[#07080a] font-[family-name:var(--font-geist-sans)] text-zinc-100 antialiased">
-      <div className="pointer-events-none fixed inset-0 bg-[radial-gradient(ellipse_80%_50%_at_50%_-20%,_rgba(16,185,129,0.08),_transparent)]" />
-
+    <div className="brand-shell min-h-screen font-[family-name:var(--font-geist-sans)] text-zinc-100 antialiased">
       {/* Top bar */}
-      <header className="sticky top-0 z-30 border-b border-zinc-800/80 bg-[#07080a]/90 backdrop-blur-md">
+      <header className="sticky top-0 z-30 border-b border-emerald-900/50 bg-[#050806]/90 backdrop-blur-md">
         <div className="mx-auto flex max-w-5xl items-center justify-between gap-4 px-4 py-3 md:px-6">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
                 NATMusicQR
               </p>
-              <span className="rounded-md bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-emerald-300 ring-1 ring-emerald-500/30">
+              <span className="rounded-md bg-emerald-500/25 px-1.5 py-0.5 text-[10px] font-bold tracking-wide text-emerald-200 ring-1 ring-emerald-400/40">
                 v{ADMIN_UI_VERSION}
               </span>
             </div>
-            <h1 className="truncate text-lg font-semibold tracking-tight text-white md:text-xl">
+            <h1 className="truncate text-lg font-semibold tracking-tight text-emerald-50 md:text-xl">
               Administración
             </h1>
           </div>
@@ -905,7 +903,7 @@ export default function AdminPage() {
           <div
             className={`mb-4 rounded-lg border px-3.5 py-2.5 text-sm ${
               error
-                ? 'border-red-900/60 bg-red-950/40 text-red-300'
+                ? 'border-emerald-900/60 bg-emerald-950/40 text-emerald-300'
                 : 'border-emerald-900/50 bg-emerald-950/30 text-emerald-300'
             }`}
           >
@@ -1333,7 +1331,7 @@ export default function AdminPage() {
                     key={c.key}
                     className={`rounded-xl border p-3 ${
                       c.banned
-                        ? 'border-red-900/50 bg-red-950/20'
+                        ? 'border-emerald-900/50 bg-emerald-950/20'
                         : c.playing
                           ? 'border-emerald-800/50 bg-emerald-950/20'
                           : 'border-zinc-800/80 bg-zinc-900/40'
@@ -1357,7 +1355,7 @@ export default function AdminPage() {
                             </span>
                           ) : null}
                           {c.banned ? (
-                            <span className="ml-2 text-[10px] font-bold uppercase text-red-400">
+                            <span className="ml-2 text-[10px] font-bold uppercase text-emerald-400">
                               expulsado
                             </span>
                           ) : null}
@@ -1390,12 +1388,12 @@ export default function AdminPage() {
                           type="button"
                           disabled={kickBusy === c.key}
                           onClick={() => void kickClient(c)}
-                          className="shrink-0 rounded-lg border border-red-900/50 bg-red-950/40 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:border-red-600 hover:bg-red-900/40 disabled:opacity-50"
+                          className="shrink-0 rounded-lg border border-emerald-900/50 bg-emerald-950/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:border-emerald-600 hover:bg-emerald-900/40 disabled:opacity-50"
                         >
                           {kickBusy === c.key ? '…' : 'Expulsar'}
                         </button>
                       ) : (
-                        <span className="text-[10px] text-red-400">
+                        <span className="text-[10px] text-emerald-400">
                           Bloqueado
                         </span>
                       )}
@@ -1456,10 +1454,10 @@ export default function AdminPage() {
                   {bannedRows.map((b) => (
                     <div
                       key={b.id}
-                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-red-900/40 bg-red-950/20 px-3 py-2"
+                      className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-emerald-900/40 bg-emerald-950/20 px-3 py-2"
                     >
                       <div className="min-w-0">
-                        <p className="text-sm font-medium text-red-100">
+                        <p className="text-sm font-medium text-emerald-100">
                           {b.label}
                         </p>
                         <p className="text-[11px] text-zinc-500">
@@ -1622,7 +1620,7 @@ export default function AdminPage() {
                 />
               </Field>
               {pwdError && (
-                <p className="text-sm text-red-400">{pwdError}</p>
+                <p className="text-sm text-emerald-400">{pwdError}</p>
               )}
               {pwdMessage && (
                 <p className="text-sm text-emerald-400">{pwdMessage}</p>
@@ -1699,7 +1697,7 @@ export default function AdminPage() {
                             onClick={() =>
                               void handleDeviceAction(d.id, 'rejected')
                             }
-                            className="rounded-lg border border-red-800 px-3 py-1.5 text-xs font-semibold text-red-300 hover:bg-red-950/50 disabled:opacity-50"
+                            className="rounded-lg border border-emerald-800 px-3 py-1.5 text-xs font-semibold text-emerald-300 hover:bg-emerald-950/50 disabled:opacity-50"
                           >
                             Rechazar
                           </button>
@@ -1712,7 +1710,7 @@ export default function AdminPage() {
                           onClick={() =>
                             void handleDeviceAction(d.id, 'rejected')
                           }
-                          className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-red-800 hover:text-red-300"
+                          className="rounded-lg border border-zinc-700 px-3 py-1.5 text-xs text-zinc-400 hover:border-emerald-800 hover:text-emerald-300"
                         >
                           Revocar
                         </button>
@@ -1813,7 +1811,7 @@ export default function AdminPage() {
                       type="button"
                       disabled={deletingId === video.id}
                       onClick={() => void deleteVideo(video)}
-                      className="shrink-0 rounded-lg border border-red-900/50 bg-red-950/40 px-3 py-1.5 text-xs font-semibold text-red-300 transition hover:border-red-600 hover:bg-red-900/50 hover:text-red-100 disabled:opacity-50"
+                      className="shrink-0 rounded-lg border border-emerald-900/50 bg-emerald-950/40 px-3 py-1.5 text-xs font-semibold text-emerald-300 transition hover:border-emerald-600 hover:bg-emerald-900/50 hover:text-emerald-100 disabled:opacity-50"
                     >
                       {deletingId === video.id ? '…' : 'Eliminar'}
                     </button>

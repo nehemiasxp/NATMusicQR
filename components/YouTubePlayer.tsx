@@ -813,7 +813,7 @@ export default function YouTubePlayer({
       ) : null}
 
       {status && (
-        <div className="pointer-events-none absolute inset-x-0 top-0 z-[25] bg-red-950/90 px-4 py-2 text-center text-sm text-red-100">
+        <div className="pointer-events-none absolute inset-x-0 top-0 z-[25] bg-emerald-950/90 px-4 py-2 text-center text-sm text-emerald-100">
           {status}
         </div>
       )}

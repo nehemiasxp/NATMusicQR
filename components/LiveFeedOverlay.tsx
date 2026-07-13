@@ -146,7 +146,7 @@ export default function LiveFeedOverlay({
     >
       {/* Debug sutil si el feed falla */}
       {!liveOk && (
-        <div className="absolute right-2 top-2 rounded bg-red-900/80 px-2 py-0.5 text-[10px] text-red-100">
+        <div className="absolute right-2 top-2 rounded bg-emerald-900/80 px-2 py-0.5 text-[10px] text-emerald-100">
           feed offline
         </div>
       )}
@@ -219,7 +219,7 @@ export default function LiveFeedOverlay({
             className={`flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-bold shadow-lg backdrop-blur-sm sm:text-base ${
               b.kind === 'like'
                 ? 'bg-emerald-500 text-white ring-2 ring-emerald-200/60'
-                : 'bg-red-600 text-white ring-2 ring-red-200/60'
+                : 'bg-emerald-600 text-white ring-2 ring-emerald-200/60'
             }`}
           >
             <span className="text-lg">

@@ -521,22 +521,22 @@ export default function PlayerPage() {
       <div className="min-h-screen bg-black flex items-center justify-center text-white p-6">
         <div className="text-center max-w-md">
           <h1 className="text-2xl font-bold mb-2">Local no encontrado</h1>
-          <p className="text-red-400">{error}</p>
+          <p className="text-emerald-400">{error}</p>
         </div>
       </div>
     )
   }
 
   return (
-    <div className="min-h-screen bg-black text-white p-4 md:p-6">
+    <div className="brand-shell min-h-screen text-white p-4 md:p-6">
       <VersionGuard mode="auto" />
       <div className="max-w-6xl mx-auto">
         <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
           <div>
-            <p className="text-emerald-400 text-sm tracking-[2px] uppercase">
+            <p className="text-emerald-300 text-sm tracking-[2px] uppercase font-semibold">
               {venue?.slug}
             </p>
-            <h1 className="text-2xl md:text-3xl font-bold">
+            <h1 className="text-2xl md:text-3xl font-bold text-emerald-50">
               {venue?.name ?? 'NATMusicQR'} — TV
             </h1>
           </div>
@@ -570,7 +570,7 @@ export default function PlayerPage() {
         </div>
 
         {error && (
-          <div className="mb-4 rounded-xl border border-red-800 bg-red-950/50 px-4 py-3 text-red-300">
+          <div className="mb-4 rounded-xl border border-emerald-800 bg-emerald-950/50 px-4 py-3 text-emerald-300">
             {error}
           </div>
         )}
@@ -667,7 +667,7 @@ export default function PlayerPage() {
                   <p className="mt-1 text-lg">
                     <span className="text-emerald-400">👍 {voteStats.up}</span>
                     {'  '}
-                    <span className="text-red-400">👎 {voteStats.down}</span>
+                    <span className="text-emerald-400">👎 {voteStats.down}</span>
                   </p>
                   <p className="mt-1 text-xs text-zinc-500">
                     {voteStats.downPercent}% rechazo (también en autoplay)

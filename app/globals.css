@@ -1,8 +1,11 @@
 @import "tailwindcss";
 
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --background: #050806;
+  --foreground: #ecfdf5;
+  --brand: #10b981;
+  --brand-soft: rgba(16, 185, 129, 0.14);
+  --brand-glow: rgba(16, 185, 129, 0.22);
 }
 
 @theme inline {
@@ -14,8 +17,8 @@
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+    --background: #050806;
+    --foreground: #ecfdf5;
   }
 }
 
@@ -23,6 +26,14 @@ body {
   background: var(--background);
   color: var(--foreground);
   font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+/* Ambiente verde de marca en toda la app */
+.brand-shell {
+  background-color: #050806;
+  background-image:
+    radial-gradient(ellipse 90% 55% at 50% -15%, var(--brand-glow), transparent 55%),
+    radial-gradient(ellipse 50% 40% at 100% 100%, rgba(5, 150, 105, 0.12), transparent 50%);
 }
 
 /* Burbujas like/dislike en TV — suben hacia arriba */

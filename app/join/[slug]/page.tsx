@@ -734,7 +734,7 @@ export default function JoinPage() {
 
   if (loading || !sessionReady) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-white">
+      <div className="brand-shell min-h-screen flex items-center justify-center text-emerald-100">
         Cargando...
       </div>
     )
@@ -742,10 +742,10 @@ export default function JoinPage() {
 
   if (error && !venue) {
     return (
-      <div className="min-h-screen bg-zinc-950 flex items-center justify-center text-white p-6">
+      <div className="brand-shell min-h-screen flex items-center justify-center text-white p-6">
         <div className="text-center max-w-md">
-          <h1 className="text-2xl font-bold mb-2">Local no encontrado</h1>
-          <p className="text-red-400">{error}</p>
+          <h1 className="text-2xl font-bold mb-2 text-emerald-50">Local no encontrado</h1>
+          <p className="text-emerald-300">{error}</p>
         </div>
       </div>
     )
@@ -754,14 +754,14 @@ export default function JoinPage() {
   // ——— Pantalla: entrar como mesa ———
   if (!session) {
     return (
-      <div className="min-h-screen bg-zinc-950 text-white flex items-center justify-center p-4">
+      <div className="brand-shell min-h-screen text-white flex items-center justify-center p-4">
         <VersionGuard mode="banner" />
         <div className="w-full max-w-md">
-          <p className="text-emerald-400 text-xs tracking-[2px] uppercase font-medium">
+          <p className="text-emerald-300 text-xs tracking-[2px] uppercase font-semibold">
             {venue?.name ?? 'NATMusicQR'}
           </p>
-          <h1 className="text-3xl font-bold mt-2 mb-2">¿En qué mesa estás?</h1>
-          <p className="text-zinc-400 text-sm mb-6">
+          <h1 className="text-3xl font-bold mt-2 mb-2 text-emerald-50">¿En qué mesa estás?</h1>
+          <p className="text-emerald-100/55 text-sm mb-6">
             Así sabemos quién pide cada canción. Si escaneaste un QR de mesa, ya
             puede venir rellenado.
           </p>
@@ -770,7 +770,7 @@ export default function JoinPage() {
             <div
               className={`mb-4 rounded-xl border px-4 py-3 text-sm ${
                 rules.access.isOpen === false
-                  ? 'border-red-800 bg-red-950/40 text-red-200'
+                  ? 'border-emerald-800 bg-emerald-950/40 text-emerald-200'
                   : 'border-zinc-800 bg-zinc-900/60 text-zinc-300'
               }`}
             >
@@ -895,20 +895,20 @@ export default function JoinPage() {
   ]
 
   return (
-    <div className="min-h-screen bg-[#07080a] font-[family-name:var(--font-geist-sans)] text-zinc-100 antialiased">
+    <div className="brand-shell min-h-screen font-[family-name:var(--font-geist-sans)] text-zinc-100 antialiased">
       <VersionGuard mode="banner" />
       <div className="mx-auto max-w-3xl px-4 py-5 pb-28">
         <header className="mb-4 flex items-start justify-between gap-3">
           <div className="min-w-0">
             <div className="flex items-center gap-2">
-              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-400/90">
+              <p className="text-[10px] font-semibold uppercase tracking-[0.18em] text-emerald-300">
                 {venue?.slug}
               </p>
-              <span className="rounded-md bg-emerald-500/10 px-1.5 py-0.5 text-[10px] font-bold text-emerald-300/90 ring-1 ring-emerald-500/25">
+              <span className="rounded-md bg-emerald-500/20 px-1.5 py-0.5 text-[10px] font-bold text-emerald-200 ring-1 ring-emerald-400/40">
                 v{JOIN_UI_VERSION}
               </span>
             </div>
-            <h1 className="mt-1 truncate text-xl font-semibold tracking-tight text-white">
+            <h1 className="mt-1 truncate text-xl font-semibold tracking-tight text-emerald-50">
               {venue?.name}
             </h1>
           </div>
@@ -1107,7 +1107,7 @@ export default function JoinPage() {
                 type="button"
                 disabled={!!superBusy || (waiting.length === 0 && !playing)}
                 onClick={() => void runSuperAction('cancel_all')}
-                className="col-span-2 rounded-xl border border-red-700/40 bg-red-800/80 px-2 py-3 text-center text-xs font-bold text-white transition hover:bg-red-700 disabled:opacity-40 sm:col-span-1 sm:text-sm"
+                className="col-span-2 rounded-xl border border-emerald-700/40 bg-emerald-800/80 px-2 py-3 text-center text-xs font-bold text-white transition hover:bg-emerald-700 disabled:opacity-40 sm:col-span-1 sm:text-sm"
               >
                 {superBusy === 'cancel_all' ? '…' : '🗑 Cancelar todo'}
               </button>
@@ -1231,8 +1231,8 @@ export default function JoinPage() {
                       onClick={() => castVote('down')}
                       className={`flex min-h-[3.5rem] items-center gap-2.5 rounded-2xl border-2 px-3 py-2.5 text-left transition active:scale-[0.98] disabled:opacity-50 sm:min-h-[3.75rem] sm:gap-3 sm:px-4 ${
                         myVote === 'down'
-                          ? 'border-red-400 bg-red-600 text-white shadow-lg shadow-red-950/40'
-                          : 'border-red-900/45 bg-zinc-900/90 text-zinc-100 hover:border-red-500/60 hover:bg-red-950/35'
+                          ? 'border-emerald-400 bg-emerald-600 text-white shadow-lg shadow-emerald-950/40'
+                          : 'border-emerald-900/45 bg-zinc-900/90 text-zinc-100 hover:border-emerald-500/60 hover:bg-emerald-950/35'
                       }`}
                       aria-label="No me gusta"
                     >
@@ -1249,7 +1249,7 @@ export default function JoinPage() {
                       </span>
                       <span
                         className={`shrink-0 text-xl font-bold tabular-nums leading-none sm:text-2xl ${
-                          myVote === 'down' ? 'text-white' : 'text-red-400'
+                          myVote === 'down' ? 'text-white' : 'text-emerald-400'
                         }`}
                       >
                         {voteDown}
@@ -1382,7 +1382,7 @@ export default function JoinPage() {
                         type="button"
                         disabled={!!superBusy}
                         onClick={() => void runSuperAction('remove', item.id)}
-                        className="shrink-0 rounded-full border border-red-800/60 bg-red-950/50 px-2.5 py-1 text-[10px] font-semibold text-red-300 transition hover:bg-red-900/60 disabled:opacity-40"
+                        className="shrink-0 rounded-full border border-emerald-800/60 bg-emerald-950/50 px-2.5 py-1 text-[10px] font-semibold text-emerald-300 transition hover:bg-emerald-900/60 disabled:opacity-40"
                       >
                         {superBusy === `rm-${item.id}` ? '…' : 'Eliminar'}
                       </button>
@@ -1515,7 +1515,7 @@ export default function JoinPage() {
                 <button
                   type="submit"
                   disabled={searching}
-                  className="w-full rounded-xl bg-red-600 py-3.5 text-base font-bold tracking-tight text-white shadow-lg shadow-red-950/40 transition hover:bg-red-500 disabled:opacity-50 sm:text-lg"
+                  className="w-full rounded-xl bg-emerald-600 py-3.5 text-base font-bold tracking-tight text-white shadow-lg shadow-emerald-950/40 transition hover:bg-emerald-500 disabled:opacity-50 sm:text-lg"
                 >
                   {searching ? 'Buscando…' : 'Buscar en YouTube'}
                 </button>
